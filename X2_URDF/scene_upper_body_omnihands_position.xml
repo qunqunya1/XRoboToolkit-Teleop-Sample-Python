@@ -1,0 +1,63 @@
+<mujoco model="x2 scene upper-body omnihands position">
+  <include file="x2_ultra_with_omnihands_generated.xml"/>
+
+  <statistic center="0 0 0.6" extent="1.3"/>
+
+  <visual>
+    <headlight diffuse="0.5 0.5 0.5" ambient="0.2 0.2 0.2" specular="0.9 0.9 0.9"/>
+    <rgba haze="0.15 0.25 0.35 1"/>
+    <global azimuth="200" elevation="-20"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="3072"/>
+    <texture type="2d" name="groundplane" builtin="checker" mark="edge" rgb1="0.3 0.52 0.63" rgb2="0.3 0.52 0.63" markrgb="1 1 1" width="300" height="300"/>
+    <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="5 5" reflectance="0.2"/>
+  </asset>
+
+  <worldbody>
+    <geom name="floor" size="0 0 0.05" type="plane" material="groundplane"/>
+    <camera name="rgbd_head_front_camera" mode="targetbodycom" target="head_pitch_link" pos="0.5 0 1.2"/>
+    <body name="right_target" pos="0.35 -0.2 1.0" quat="1 0 0 0" mocap="true">
+      <geom name="right_target_x_shaft" type="cylinder" size="0.005 0.05" pos="0.05 0 0" zaxis="1 0 0" rgba="1 0 0 1" contype="0" conaffinity="0" group="1"/>
+      <geom name="right_target_y_shaft" type="cylinder" size="0.005 0.05" pos="0 0.05 0" zaxis="0 1 0" rgba="0 1 0 1" contype="0" conaffinity="0" group="1"/>
+      <geom name="right_target_z_shaft" type="cylinder" size="0.005 0.05" pos="0 0 0.05" zaxis="0 0 1" rgba="0 0 1 1" contype="0" conaffinity="0" group="1"/>
+      <site type="sphere" size="0.01" rgba="0 0 1 1" group="1"/>
+    </body>
+    <body name="left_target" pos="0.35 0.2 1.0" quat="1 0 0 0" mocap="true">
+      <geom name="left_target_x_shaft" type="cylinder" size="0.005 0.05" pos="0.05 0 0" zaxis="1 0 0" rgba="1 0 0 1" contype="0" conaffinity="0" group="1"/>
+      <geom name="left_target_y_shaft" type="cylinder" size="0.005 0.05" pos="0 0.05 0" zaxis="0 1 0" rgba="0 1 0 1" contype="0" conaffinity="0" group="1"/>
+      <geom name="left_target_z_shaft" type="cylinder" size="0.005 0.05" pos="0 0 0.05" zaxis="0 0 1" rgba="0 0 1 1" contype="0" conaffinity="0" group="1"/>
+      <site type="sphere" size="0.01" rgba="0 0 1 1" group="1"/>
+    </body>
+  </worldbody>
+
+  <actuator>
+    <position name="pos_head_yaw_joint" joint="head_yaw_joint" ctrlrange="-0.366 0.366" kp="80" kv="8" forcerange="-2.6 2.6"/>
+    <position name="pos_head_pitch_joint" joint="head_pitch_joint" ctrlrange="-0.3838 0.3838" kp="80" kv="8" forcerange="-0.6 0.6"/>
+    <position name="pos_left_shoulder_pitch_joint" joint="left_shoulder_pitch_joint" ctrlrange="-3.08 2.04" kp="800" kv="60" forcerange="-36 36"/>
+    <position name="pos_left_shoulder_roll_joint" joint="left_shoulder_roll_joint" ctrlrange="-0.061 2.993" kp="800" kv="60" forcerange="-36 36"/>
+    <position name="pos_left_shoulder_yaw_joint" joint="left_shoulder_yaw_joint" ctrlrange="-2.556 2.556" kp="650" kv="45" forcerange="-24 24"/>
+    <position name="pos_left_elbow_joint" joint="left_elbow_joint" ctrlrange="-2.3556 0.0" kp="650" kv="45" forcerange="-24 24"/>
+    <position name="pos_left_wrist_yaw_joint" joint="left_wrist_yaw_joint" ctrlrange="-2.556 2.556" kp="300" kv="20" forcerange="-24 24"/>
+    <position name="pos_left_wrist_pitch_joint" joint="left_wrist_pitch_joint" ctrlrange="-0.558 0.558" kp="250" kv="18" forcerange="-4.8 4.8"/>
+    <position name="pos_left_wrist_roll_joint" joint="left_wrist_roll_joint" ctrlrange="-1.571 0.724" kp="250" kv="18" forcerange="-4.8 4.8"/>
+    <position name="pos_right_shoulder_pitch_joint" joint="right_shoulder_pitch_joint" ctrlrange="-3.08 2.04" kp="800" kv="60" forcerange="-36 36"/>
+    <position name="pos_right_shoulder_roll_joint" joint="right_shoulder_roll_joint" ctrlrange="-2.993 0.061" kp="800" kv="60" forcerange="-36 36"/>
+    <position name="pos_right_shoulder_yaw_joint" joint="right_shoulder_yaw_joint" ctrlrange="-2.556 2.556" kp="650" kv="45" forcerange="-24 24"/>
+    <position name="pos_right_elbow_joint" joint="right_elbow_joint" ctrlrange="-2.3556 0.0" kp="650" kv="45" forcerange="-24 24"/>
+    <position name="pos_right_wrist_yaw_joint" joint="right_wrist_yaw_joint" ctrlrange="-2.556 2.556" kp="300" kv="20" forcerange="-24 24"/>
+    <position name="pos_right_wrist_pitch_joint" joint="right_wrist_pitch_joint" ctrlrange="-0.558 0.558" kp="250" kv="18" forcerange="-4.8 4.8"/>
+    <position name="pos_right_wrist_roll_joint" joint="right_wrist_roll_joint" ctrlrange="-0.724 1.571" kp="250" kv="18" forcerange="-4.8 4.8"/>
+    <position name="pos_L_thumb_mcp_joint" joint="L_thumb_mcp_joint" ctrlrange="-0.8552113334772214 0.0" kp="120.0" kv="10.0" forcerange="-1.764 1.764"/>
+    <position name="pos_L_index_abad_joint" joint="L_index_abad_joint" ctrlrange="0.0 0.20943951023931953" kp="120.0" kv="10.0" forcerange="-1.863 1.863"/>
+    <position name="pos_L_middle_abad_joint" joint="L_middle_abad_joint" ctrlrange="0.0 0.20943951023931953" kp="120.0" kv="10.0" forcerange="-1.863 1.863"/>
+    <position name="pos_L_ring_abad_joint" joint="L_ring_abad_joint" ctrlrange="-0.17453292519943295 0.0" kp="120.0" kv="10.0" forcerange="-2.766 2.766"/>
+    <position name="pos_L_pinky_abad_joint" joint="L_pinky_abad_joint" ctrlrange="-0.17453292519943295 0.0" kp="120.0" kv="10.0" forcerange="-3.393 3.393"/>
+    <position name="pos_R_thumb_mcp_joint" joint="R_thumb_mcp_joint" ctrlrange="0.0 0.8552113334772214" kp="120.0" kv="10.0" forcerange="-1.764 1.764"/>
+    <position name="pos_R_index_abad_joint" joint="R_index_abad_joint" ctrlrange="-0.20943951023931953 0.0" kp="120.0" kv="10.0" forcerange="-1.863 1.863"/>
+    <position name="pos_R_middle_abad_joint" joint="R_middle_abad_joint" ctrlrange="-0.20943951023931953 0.0" kp="120.0" kv="10.0" forcerange="-1.863 1.863"/>
+    <position name="pos_R_ring_abad_joint" joint="R_ring_abad_joint" ctrlrange="0.0 0.17453292519943295" kp="120.0" kv="10.0" forcerange="-2.766 2.766"/>
+    <position name="pos_R_pinky_abad_joint" joint="R_pinky_abad_joint" ctrlrange="0.0 0.17453292519943295" kp="120.0" kv="10.0" forcerange="-3.393 3.393"/>
+  </actuator>
+</mujoco>

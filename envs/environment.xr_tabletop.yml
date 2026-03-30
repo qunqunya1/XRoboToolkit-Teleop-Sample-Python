@@ -1,0 +1,10 @@
+name: xr-tabletop
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - libstdcxx-ng
+  - pip:
+      - -r envs/requirements.xr_tabletop.txt

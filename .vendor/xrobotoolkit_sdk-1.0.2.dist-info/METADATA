@@ -1,0 +1,14 @@
+Metadata-Version: 2.1
+Name: xrobotoolkit-sdk
+Version: 1.0.2
+Summary: A Python binding for XRobotoolkit PC Service SDK using pybind11 and CMake
+Home-page: UNKNOWN
+Author: Zhigen Zhao
+Author-email: zhigen.zhao@bytedance.com
+License: UNKNOWN
+Platform: UNKNOWN
+Requires-Python: >=3.10
+License-File: LICENSE
+
+UNKNOWN
+

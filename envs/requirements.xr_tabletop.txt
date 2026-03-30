@@ -1,0 +1,39 @@
+# Combined pip requirements for XRoboToolkit + Tabletop-Sim
+# Pin key conflict points first.
+numpy>=2.2,<2.3
+mujoco==3.2.0
+dm_control==1.0.21
+opencv-python==4.10.0.84
+protobuf>=3.20,<4
+click>=7,<8.1
+
+# Tabletop-Sim requirements
+pyyaml
+pexpect
+matplotlib
+einops
+packaging
+h5py
+tensorflow-datasets
+draccus
+
+# XRoboToolkit project requirements
+meshcat
+placo==0.9.20
+ur_rtde
+dynamixel-sdk
+rospkg
+torch
+dex_retargeting==0.4.5
+pyrealsense2
+tyro
+
+# Resolve warnings observed in mixed environments
+snowballstemmer
+beautifulsoup4
+
+# Install both local projects in editable mode
+-e .
+-e ./Tabletop-Sim
+
+nlopt==2.6.1
