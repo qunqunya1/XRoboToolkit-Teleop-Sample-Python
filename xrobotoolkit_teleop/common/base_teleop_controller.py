@@ -67,25 +67,26 @@ class BaseTeleopController(abc.ABC):
         self.gripper_pos_target = {}
         self.gripper_trigger_value = {}
         self.gripper_trigger_when_active = {}
+        self.gripper_preset_mode = {}
+        self.gripper_preset_selected_index = {}
+        self.gripper_preset_applied_index = {}
+        self.gripper_preset_prev_active = {}
+        self.gripper_preset_prev_button_state = {}
+        self.gripper_preset_button = {}
+        self.gripper_preset_targets = {}
+        self.gripper_preset_ratio_values = {}
+        self.gripper_preset_names = {}
 
         # Motion tracker support
         self.motion_tracker_task = {}
         self.ref_tracker_xyz = {}  # Store initial tracker positions
         self.ref_robot_xyz = {}  # Store initial robot end-effector positions
-        for name, config in self.manipulator_config.items():
-            if "gripper_config" in config:
-                gripper_config = config["gripper_config"]
-                self.gripper_pos_target[name] = {
-                    joint_name: joint_pos
-                    for joint_name, joint_pos in zip(gripper_config["joint_names"], gripper_config["open_pos"])
-                }
-                self.gripper_trigger_value[name] = 0.0
-                self.gripper_trigger_when_active[name] = None
 
         self._stop_event = threading.Event()
 
         self._robot_setup()
         self._placo_setup()
+        self._initialize_gripper_targets()
 
     def _get_current_target_control_pose(
         self,
@@ -657,21 +658,174 @@ class BaseTeleopController(abc.ABC):
             active_only = bool(gripper_config.get("active_only", False))
             if active_only and not self.active.get(gripper_name, False):
                 self.gripper_trigger_when_active[gripper_name] = None
-                continue
-            self.gripper_trigger_when_active[gripper_name] = float(trigger_value)
-
-            if gripper_type == "parallel":
-                for joint_name, open_pos, close_pos in zip(
-                    gripper_config["joint_names"],
-                    gripper_config["open_pos"],
-                    gripper_config["close_pos"],
-                ):
-                    # Calculate the target position based on the trigger value
-                    gripper_pos = calc_parallel_gripper_position(open_pos, close_pos, trigger_value)
-                    self.gripper_pos_target[gripper_name][joint_name] = gripper_pos
             else:
-                # TODO: add dexterous hand support
-                raise ValueError(f"Unsupported gripper type: {gripper_type}")
+                self.gripper_trigger_when_active[gripper_name] = float(trigger_value)
+
+                if gripper_type == "parallel":
+                    for joint_name, open_pos, close_pos in zip(
+                        gripper_config["joint_names"],
+                        gripper_config["open_pos"],
+                        gripper_config["close_pos"],
+                    ):
+                        gripper_pos = calc_parallel_gripper_position(open_pos, close_pos, trigger_value)
+                        self.gripper_pos_target[gripper_name][joint_name] = gripper_pos
+                else:
+                    raise ValueError(f"Unsupported gripper type: {gripper_type}")
+
+            self._update_gripper_preset_state(gripper_name)
+
+    def _get_joint_position_by_name(self, joint_name: str) -> float | None:
+        return None
+
+    def _initialize_gripper_targets(self):
+        for gripper_name, config in self.manipulator_config.items():
+            if "gripper_config" not in config:
+                continue
+
+            gripper_config = config["gripper_config"]
+            initial_targets = {
+                joint_name: joint_pos
+                for joint_name, joint_pos in zip(gripper_config["joint_names"], gripper_config["open_pos"])
+            }
+
+            preset_joint_names = list(gripper_config.get("preset_joint_names", []))
+            preset_mode = str(gripper_config.get("preset_mode", "")).strip().lower()
+            preset_targets = list(gripper_config.get("preset_targets", []))
+            preset_initial_index = int(gripper_config.get("preset_initial_index", 0))
+
+            if preset_joint_names:
+                if preset_mode == "loaded" and preset_targets:
+                    preset_initial_index = max(0, min(preset_initial_index, len(preset_targets) - 1))
+                    initial_targets.update(preset_targets[preset_initial_index])
+                else:
+                    for joint_name in preset_joint_names:
+                        current_pos = self._get_joint_position_by_name(joint_name)
+                        if current_pos is not None:
+                            initial_targets[joint_name] = float(current_pos)
+
+            self.gripper_pos_target[gripper_name] = initial_targets
+            self.gripper_trigger_value[gripper_name] = 0.0
+            self.gripper_trigger_when_active[gripper_name] = None
+
+            if preset_joint_names:
+                self._initialize_gripper_preset_state(
+                    gripper_name=gripper_name,
+                    gripper_config=gripper_config,
+                    initial_targets=initial_targets,
+                )
+
+    def _initialize_gripper_preset_state(
+        self,
+        gripper_name: str,
+        gripper_config: Dict[str, Any],
+        initial_targets: Dict[str, float],
+    ):
+        preset_mode = str(gripper_config.get("preset_mode", "current_position_fallback")).strip().lower()
+        preset_joint_names = list(gripper_config.get("preset_joint_names", []))
+        preset_button = gripper_config.get("preset_button")
+
+        self.gripper_preset_mode[gripper_name] = preset_mode
+        self.gripper_preset_button[gripper_name] = preset_button
+        self.gripper_preset_prev_active[gripper_name] = bool(self.active.get(gripper_name, False))
+        self.gripper_preset_prev_button_state[gripper_name] = False
+
+        if preset_mode == "loaded":
+            preset_targets = [dict(targets) for targets in gripper_config.get("preset_targets", [])]
+            preset_ratio_values = [dict(values) for values in gripper_config.get("preset_ratio_values", [])]
+            preset_names = list(gripper_config.get("preset_names", []))
+            preset_initial_index = int(gripper_config.get("preset_initial_index", 0))
+            preset_initial_index = max(0, min(preset_initial_index, len(preset_targets) - 1))
+
+            self.gripper_preset_targets[gripper_name] = preset_targets
+            self.gripper_preset_ratio_values[gripper_name] = preset_ratio_values
+            self.gripper_preset_names[gripper_name] = preset_names
+            self.gripper_preset_selected_index[gripper_name] = preset_initial_index
+            self.gripper_preset_applied_index[gripper_name] = preset_initial_index
+
+            preset_file_path = gripper_config.get("preset_file_path")
+            print(
+                f"{gripper_name}: loaded hand presets from {preset_file_path} "
+                f"(count={len(preset_targets)}, initial_index={preset_initial_index})"
+            )
+            return
+
+        fallback_targets = {
+            joint_name: float(initial_targets[joint_name])
+            for joint_name in preset_joint_names
+            if joint_name in initial_targets
+        }
+        self.gripper_preset_targets[gripper_name] = [fallback_targets]
+        self.gripper_preset_ratio_values[gripper_name] = [{}]
+        self.gripper_preset_names[gripper_name] = ["current_position"]
+        self.gripper_preset_selected_index[gripper_name] = 0
+        self.gripper_preset_applied_index[gripper_name] = 0
+        print(
+            f"{gripper_name}: no preset file found in {gripper_config.get('preset_dir_path')}; "
+            "preset joint group will start from current position."
+        )
+
+    def _apply_gripper_preset(self, gripper_name: str, preset_index: int, reason: str):
+        preset_targets = self.gripper_preset_targets.get(gripper_name, [])
+        if not preset_targets:
+            return
+
+        preset_index = max(0, min(int(preset_index), len(preset_targets) - 1))
+        self.gripper_pos_target[gripper_name].update(preset_targets[preset_index])
+        self.gripper_preset_applied_index[gripper_name] = preset_index
+
+        preset_names = self.gripper_preset_names.get(gripper_name, [])
+        preset_label = preset_names[preset_index] if preset_index < len(preset_names) else f"preset_{preset_index}"
+        if reason == "button_active":
+            print(f"{gripper_name}: switched to preset {preset_index} ({preset_label}) and applied immediately.")
+        elif reason == "button_pending":
+            print(f"{gripper_name}: switched to preset {preset_index} ({preset_label}); will apply on next grip activation.")
+        elif reason == "grip_activation":
+            print(f"{gripper_name}: applied preset {preset_index} ({preset_label}) on grip activation.")
+
+    def _update_gripper_preset_state(self, gripper_name: str):
+        if gripper_name not in self.gripper_preset_mode:
+            return
+
+        preset_mode = self.gripper_preset_mode[gripper_name]
+        preset_button = self.gripper_preset_button.get(gripper_name)
+        button_state = False
+        if preset_button:
+            button_state = bool(self.xr_client.get_button_state_by_name(preset_button))
+
+        prev_button_state = self.gripper_preset_prev_button_state.get(gripper_name, False)
+        active = bool(self.active.get(gripper_name, False))
+        prev_active = self.gripper_preset_prev_active.get(gripper_name, active)
+
+        if button_state and not prev_button_state:
+            if preset_mode == "loaded":
+                preset_count = len(self.gripper_preset_targets.get(gripper_name, []))
+                if preset_count > 0:
+                    next_index = (self.gripper_preset_selected_index[gripper_name] + 1) % preset_count
+                    self.gripper_preset_selected_index[gripper_name] = next_index
+                    if active:
+                        self._apply_gripper_preset(gripper_name, next_index, reason="button_active")
+                    else:
+                        preset_names = self.gripper_preset_names.get(gripper_name, [])
+                        preset_label = (
+                            preset_names[next_index]
+                            if next_index < len(preset_names)
+                            else f"preset_{next_index}"
+                        )
+                        print(
+                            f"{gripper_name}: switched to preset {next_index} ({preset_label}); "
+                            "will apply on next grip activation."
+                        )
+            else:
+                print(f"{gripper_name}: no preset file loaded, keeping current preset pose.")
+
+        if active and not prev_active and preset_mode == "loaded":
+            selected_index = self.gripper_preset_selected_index.get(gripper_name, 0)
+            applied_index = self.gripper_preset_applied_index.get(gripper_name, 0)
+            if selected_index != applied_index:
+                self._apply_gripper_preset(gripper_name, selected_index, reason="grip_activation")
+
+        self.gripper_preset_prev_button_state[gripper_name] = button_state
+        self.gripper_preset_prev_active[gripper_name] = active
 
     def _log_data(self):
         """

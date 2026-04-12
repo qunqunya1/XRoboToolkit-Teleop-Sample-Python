@@ -1,0 +1,25 @@
+# macOS (Apple Silicon) simulation-only requirements for XRoboToolkit.
+# This file is intentionally limited to MuJoCo simulation, keyboard mock input,
+# offline log analysis, and dataset conversion workflows.
+#
+# Explicitly excluded:
+# - xrobotoolkit_sdk / XRoboToolkit-PC-Service bindings
+# - ur_rtde
+# - dynamixel-sdk
+# - rospkg
+# - pyrealsense2
+# - dex_retargeting
+
+numpy>=2.2,<2.3
+mujoco==3.2.0
+meshcat
+opencv-python==4.10.0.84
+tyro
+matplotlib
+h5py
+packaging
+pyyaml
+einops
+pexpect
+draccus
+tensorflow-datasets

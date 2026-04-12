@@ -7,15 +7,15 @@ Pico teleoperation demo written in python for both mujoco simulation and robot h
 This project provides a framework for controlling robots in robot hardware and MuJoCo simulation through XR (VR/AR) input devices. It allows users to manipulate robot arms using natural hand movements captured through XR controllers.
 
 ## Installation
-1. Download and install [XRoboToolkit PC Service](https://github.com/XR-Robotics/XRoboToolkit-PC-Service). Run the installed program before running the following demo.
-
-2.  **Clone the repository:**
+1.  **Clone the repository:**
     ```bash
     git clone https://github.com/XR-Robotics/XRoboToolkit-Teleop-Sample-Python.git
     cd XRoboToolkit-Teleop-Sample-Python
     ```
 
-3.  **Installation**
+2.  **Linux / full XR + hardware setup**
+    Download and install [XRoboToolkit PC Service](https://github.com/XR-Robotics/XRoboToolkit-PC-Service). Run the installed program before running the following demo.
+
     **Note:** The setup scripts are currently only tested on Ubuntu 22.04.
     It is recommended to setup a Conda environment and install the project using the included script.
     ```bash
@@ -28,6 +28,39 @@ This project provides a framework for controlling robots in robot hardware and M
     ```bash
     bash setup.sh
     ```
+
+3.  **macOS (Apple Silicon) simulation-only**
+    This workflow is limited to:
+    - MuJoCo simulation
+    - built-in keyboard mock input
+    - offline log analysis and dataset conversion
+
+    It does **not** support:
+    - XRoboToolkit PC Service / `xrobotoolkit_sdk`
+    - Unity keyboard XR client as the primary workflow
+    - robot hardware / ROS / RealSense / dex hand tracking
+
+    Conda workflow:
+    ```bash
+    bash setup_conda_mac.sh --conda <optional_env_name>
+    conda activate <env_name>
+    bash setup_conda_mac.sh --install
+    export XROBOTOOLKIT_INPUT=keyboard
+    ```
+
+    Virtual environment workflow:
+    ```bash
+    bash setup_mac.sh
+    source .venv-mac/bin/activate
+    export XROBOTOOLKIT_INPUT=keyboard
+    ```
+
+    Quick validation:
+    ```bash
+    python scripts/simulation/teleop_x2_upper_body_mujoco.py --visualize-placo False
+    ```
+
+    If `XROBOTOOLKIT_INPUT` is not set, `XrClient` will try the SDK first and only fall back if it is unavailable.
 
 ## Usage
 Use the following instructions to run example scripts. For a more detailed description, please refer to [`teleop_details.md`](teleop_details.md).
@@ -48,10 +81,11 @@ python scripts/simulation/teleop_x2_ultra_mujoco.py
 ```
 `x2_ultra` defaults are configured to lock floating base + lower-body + waist joints so the robot stays fixed while teleoperating the two arms.
 
-If you do not have a Pico device yet, run keyboard-mock mode:
+If you do not have a Pico device yet, run keyboard-mock mode. This is also the default keyboard path for macOS simulation-only installs:
 
 ```bash
-python scripts/simulation/teleop_x2_ultra_mujoco_keyboard.py
+export XROBOTOOLKIT_INPUT=keyboard
+python scripts/simulation/teleop_x2_upper_body_mujoco.py --visualize-placo False
 ```
 
 Keyboard mock quick controls:
@@ -65,22 +99,23 @@ Keyboard mock quick controls:
 End-to-end keyboard workflow (no headset required):
 1. Launch simulation:
    ```bash
-   python scripts/simulation/teleop_x2_ultra_mujoco_keyboard.py --xml-path X2_URDF/scene.xml --no-visualize-placo
+   export XROBOTOOLKIT_INPUT=keyboard
+   python scripts/simulation/teleop_x2_upper_body_mujoco.py --visualize-placo False
    ```
 2. Press `B` once to start logging, teleoperate with keyboard, press `B` again to save log.
-   - Logs are saved under `logs/x2_ultra_sim/`.
+   - Logs are saved under `logs/x2_upper_body_sim/`.
 3. Check the saved `.pkl` quickly:
    ```bash
-   python scripts/misc/test_data_log_analysis.py logs/x2_ultra_sim/<your_log>.pkl
+   python scripts/misc/test_data_log_analysis.py logs/x2_upper_body_sim/<your_log>.pkl
    ```
 4. Convert to LeRobot-style dataset:
    ```bash
-   python scripts/misc/convert_x2_sim_log_to_lerobot.py logs/x2_ultra_sim/<your_log>.pkl --output-dir datasets/x2_ultra_keyboard_lerobot
+   python scripts/misc/convert_x2_sim_log_to_lerobot.py logs/x2_upper_body_sim/<your_log>.pkl --output-dir datasets/x2_upper_body_keyboard_lerobot
    ```
 
 ### Running the Keyboard XR Simulator Client
 
-If you want to keep the official `XRoboToolkit-PC-Service -> xrobotoolkit_sdk -> XrClient` chain intact and drive teleop from a keyboard, run the standalone keyboard simulator client in a separate terminal:
+If you want to keep the official `XRoboToolkit-PC-Service -> xrobotoolkit_sdk -> XrClient` chain intact and drive teleop from a keyboard, run the standalone keyboard simulator client in a separate terminal. This is optional and is not the recommended path for macOS simulation-only setup:
 
 ```bash
 python scripts/tools/keyboard_xr_unity_client.py

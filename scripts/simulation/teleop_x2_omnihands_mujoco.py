@@ -1,10 +1,22 @@
+import json
 from pathlib import Path
 import tempfile
 import xml.etree.ElementTree as ET
 
 import tyro
+import yaml
 
 from xrobotoolkit_teleop.simulation.mujoco_teleop_controller import MujocoTeleopController
+
+
+HAND_PRESET_FIELDS = [
+    "thumb_roll",
+    "thumb_abad",
+    "index_abad",
+    "middle_abad",
+    "ring_abad",
+    "pinky_abad",
+]
 
 
 def _find_repo_root() -> Path:
@@ -87,57 +99,138 @@ def _open_close_from_limits(lower: float, upper: float) -> tuple[float, float]:
     return upper, lower
 
 
+def _discover_hand_preset_file(repo_root: Path) -> tuple[Path, Path | None]:
+    preset_dir = repo_root / "X2_with_omnihands_URDF" / "hands_preset"
+    if not preset_dir.is_dir():
+        return preset_dir, None
+
+    candidate_files = sorted(
+        path
+        for path in preset_dir.iterdir()
+        if path.is_file() and path.suffix.lower() in {".json", ".yaml", ".yml"}
+    )
+    if not candidate_files:
+        return preset_dir, None
+    return preset_dir, candidate_files[0]
+
+
+def _load_shared_hand_presets(preset_file: Path) -> list[dict[str, float | str]]:
+    if preset_file.suffix.lower() == ".json":
+        data = json.loads(preset_file.read_text(encoding="utf-8"))
+    else:
+        data = yaml.safe_load(preset_file.read_text(encoding="utf-8"))
+
+    if not isinstance(data, dict):
+        raise ValueError(f"Invalid preset file '{preset_file}': root must be a mapping.")
+
+    presets = data.get("presets")
+    if not isinstance(presets, list) or not presets:
+        raise ValueError(f"Invalid preset file '{preset_file}': 'presets' must be a non-empty list.")
+
+    normalized_presets: list[dict[str, float | str]] = []
+    for index, preset in enumerate(presets):
+        if not isinstance(preset, dict):
+            raise ValueError(f"Invalid preset file '{preset_file}': preset[{index}] must be a mapping.")
+        if "name" not in preset or not str(preset["name"]).strip():
+            raise ValueError(f"Invalid preset file '{preset_file}': preset[{index}] must define a non-empty 'name'.")
+
+        normalized: dict[str, float | str] = {"name": str(preset["name"]).strip()}
+        for field in HAND_PRESET_FIELDS:
+            if field not in preset:
+                raise ValueError(f"Invalid preset file '{preset_file}': preset[{index}] missing '{field}'.")
+            normalized[field] = _clamp(float(preset[field]), 0.0, 1.0)
+        normalized_presets.append(normalized)
+
+    return normalized_presets
+
+
 def _build_omnihand_driver_config(
     joint_limits: dict[str, tuple[float, float]],
     side_prefix: str,
     trigger_name: str,
+    preset_button: str,
+    preset_dir_path: str,
+    shared_presets: list[dict[str, float | str]] | None,
+    preset_file_path: str | None,
 ) -> dict:
-    def pick_joint(primary: str, fallback: str) -> str:
-        if primary in joint_limits:
-            return primary
-        if fallback in joint_limits:
-            print(
-                f"Info: '{primary}' is not revolute in URDF, "
-                f"fallback to '{fallback}' for trigger driving."
-            )
-            return fallback
-        raise ValueError(f"Required omnihand joint '{primary}' not found in URDF.")
-
     active_joint_names = [
         f"{side_prefix}thumb_mcp_joint",
-        pick_joint(f"{side_prefix}index_abad_joint", f"{side_prefix}index_pip_joint"),
-        pick_joint(f"{side_prefix}middle_abad_joint", f"{side_prefix}middle_pip_joint"),
-        pick_joint(f"{side_prefix}ring_abad_joint", f"{side_prefix}ring_pip_joint"),
-        pick_joint(f"{side_prefix}pinky_abad_joint", f"{side_prefix}pinky_pip_joint"),
+        f"{side_prefix}index_pip_joint",
+        f"{side_prefix}middle_pip_joint",
+        f"{side_prefix}ring_pip_joint",
+        f"{side_prefix}pinky_pip_joint",
+    ]
+    preset_joint_names = [
+        f"{side_prefix}thumb_roll_joint",
+        f"{side_prefix}thumb_abad_joint",
+        f"{side_prefix}index_abad_joint",
+        f"{side_prefix}middle_abad_joint",
+        f"{side_prefix}ring_abad_joint",
+        f"{side_prefix}pinky_abad_joint",
     ]
 
     open_pos: list[float] = []
     close_pos: list[float] = []
-    for joint_name in active_joint_names:
+    for joint_name in active_joint_names + preset_joint_names:
         if joint_name not in joint_limits:
             raise ValueError(f"Required omnihand joint '{joint_name}' not found in URDF.")
+    for joint_name in active_joint_names:
         lower, upper = joint_limits[joint_name]
         open_val, close_val = _open_close_from_limits(lower, upper)
         open_pos.append(open_val)
         close_pos.append(close_val)
 
-    thumb_abad_joint = f"{side_prefix}thumb_abad_joint"
-    if thumb_abad_joint not in joint_limits:
-        raise ValueError(f"Required omnihand joint '{thumb_abad_joint}' not found in URDF.")
-
-    _, thumb_abad_upper = joint_limits[thumb_abad_joint]
-
-    return {
+    config = {
         "type": "parallel",
         "gripper_trigger": trigger_name,
         "joint_names": active_joint_names,
         "open_pos": open_pos,
         "close_pos": close_pos,
-        # Only update hand target when arm teleop is active.
         "active_only": True,
-        "thumb_abad_joint": thumb_abad_joint,
-        "thumb_abad_default": thumb_abad_upper,
+        "preset_joint_names": preset_joint_names,
+        "preset_button": preset_button,
+        "preset_dir_path": preset_dir_path,
     }
+
+    if shared_presets:
+        preset_targets: list[dict[str, float]] = []
+        preset_ratio_values: list[dict[str, float]] = []
+        preset_names: list[str] = []
+        for preset in shared_presets:
+            preset_targets.append(
+                {
+                    joint_name: (
+                        joint_limits[joint_name][0]
+                        + float(preset[field_name]) * (joint_limits[joint_name][1] - joint_limits[joint_name][0])
+                    )
+                    for joint_name, field_name in zip(preset_joint_names, HAND_PRESET_FIELDS)
+                }
+            )
+            preset_ratio_values.append({field_name: float(preset[field_name]) for field_name in HAND_PRESET_FIELDS})
+            preset_names.append(str(preset["name"]))
+        config.update(
+            {
+                "preset_mode": "loaded",
+                "preset_targets": preset_targets,
+                "preset_ratio_values": preset_ratio_values,
+                "preset_names": preset_names,
+                "preset_initial_index": 0,
+                "preset_file_path": preset_file_path,
+            }
+        )
+    else:
+        config.update(
+            {
+                "preset_mode": "current_position_fallback",
+                "preset_targets": [],
+                "preset_ratio_values": [],
+                "preset_names": [],
+                "preset_initial_index": 0,
+                "preset_file_path": None,
+            }
+        )
+
+    return config
 
 
 def main(
@@ -164,24 +257,35 @@ def main(
 ):
     """Run X2 upper-body teleoperation with omnihands trigger capture in MuJoCo."""
 
+    repo_root = _find_repo_root()
+    preset_dir, preset_file = _discover_hand_preset_file(repo_root)
+    shared_presets = _load_shared_hand_presets(preset_file) if preset_file is not None else None
+
     # Use omnihands URDF only for hand joint mapping.
     joint_limits = _load_revolute_joint_limits(robot_urdf_path)
     # Use a dedicated IK URDF for placo (default: upper-body without hand chain).
     placo_urdf_path = _make_abs_mesh_urdf(ik_urdf_path)
-    left_gripper = _build_omnihand_driver_config(joint_limits, "L_", "left_trigger")
-    right_gripper = _build_omnihand_driver_config(joint_limits, "R_", "right_trigger")
+    left_gripper = _build_omnihand_driver_config(
+        joint_limits=joint_limits,
+        side_prefix="L_",
+        trigger_name="left_trigger",
+        preset_button="X",
+        preset_dir_path=str(preset_dir),
+        shared_presets=shared_presets,
+        preset_file_path=str(preset_file) if preset_file is not None else None,
+    )
+    right_gripper = _build_omnihand_driver_config(
+        joint_limits=joint_limits,
+        side_prefix="R_",
+        trigger_name="right_trigger",
+        preset_button="A",
+        preset_dir_path=str(preset_dir),
+        shared_presets=shared_presets,
+        preset_file_path=str(preset_file) if preset_file is not None else None,
+    )
 
-    if thumb_abad_angle is None:
-        left_thumb_abad = float(left_gripper["thumb_abad_default"])
-        right_thumb_abad = float(right_gripper["thumb_abad_default"])
-    else:
-        l_lo, l_hi = joint_limits[left_gripper["thumb_abad_joint"]]
-        r_lo, r_hi = joint_limits[right_gripper["thumb_abad_joint"]]
-        left_thumb_abad = _clamp(float(thumb_abad_angle), l_lo, l_hi)
-        right_thumb_abad = _clamp(float(thumb_abad_angle), r_lo, r_hi)
-
-    left_gripper["thumb_abad_target"] = left_thumb_abad
-    right_gripper["thumb_abad_target"] = right_thumb_abad
+    if thumb_abad_angle is not None:
+        print("Info: --thumb-abad-angle is ignored for omnihands preset control.")
 
     config = {
         "left_arm": {
@@ -249,8 +353,6 @@ def main(
         "waist_yaw_joint": None,
         "waist_pitch_joint": None,
         "waist_roll_joint": None,
-        left_gripper["thumb_abad_joint"]: left_thumb_abad,
-        right_gripper["thumb_abad_joint"]: right_thumb_abad,
     }
 
     controller = MujocoTeleopController(
@@ -303,10 +405,14 @@ def main(
     print("  - Left controller -> Left arm + left omnihand (left trigger)")
     print("  - Right controller -> Right arm + right omnihand (right trigger)")
     print("  - Hold grip buttons to activate arm control and hand trigger capture")
+    print("  - X cycles left-hand preset joints, A cycles right-hand preset joints")
     print(f"  - control profile: {control_profile}, sim_steps_per_control: {sim_steps_per_control}")
-    print(f"  - thumb_abad fixed angle: left={left_thumb_abad:.4f}, right={right_thumb_abad:.4f}")
     print(f"  - allow_missing_hand_joints: {allow_missing_hand_joints}")
     print(f"  - ik_urdf_path: {ik_urdf_path}")
+    if preset_file is not None:
+        print(f"  - hand preset file: {preset_file} (count={len(shared_presets or [])})")
+    else:
+        print(f"  - hand preset file: not found in {preset_dir}; preset joints start from current position")
     print(f"  - data logging: {enable_log_data}, log_dir: {log_dir}, log_freq: {log_freq}")
     if enable_camera_log:
         print(

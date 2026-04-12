@@ -241,6 +241,15 @@ class MujocoTeleopController(BaseTeleopController):
         if self.lock_floating_base or (self.hard_lock_static_joints and self.static_joint_targets):
             mujoco.mj_forward(self.mj_model, self.mj_data)
 
+    def _get_joint_position_by_name(self, joint_name: str) -> float | None:
+        joint_id = mujoco.mj_name2id(self.mj_model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
+        if joint_id == -1:
+            return None
+        qpos_addr = self.mj_model.jnt_qposadr[joint_id]
+        if qpos_addr >= len(self.mj_data.qpos):
+            return None
+        return float(self.mj_data.qpos[qpos_addr])
+
     def _send_command(self):
         qpos_desired = calc_mujoco_qpos_from_placo_q(
             self.mj_model,
@@ -377,12 +386,39 @@ class MujocoTeleopController(BaseTeleopController):
             hand_control = {}
             for gripper_name, joint_targets in self.gripper_pos_target.items():
                 gripper_cfg = self.manipulator_config.get(gripper_name, {}).get("gripper_config", {})
+                driver_joint_names = list(gripper_cfg.get("joint_names", []))
                 hand_control[gripper_name] = {
                     "active": bool(self.active.get(gripper_name, False)),
                     "trigger_raw": self.gripper_trigger_value.get(gripper_name),
                     "trigger_when_active": self.gripper_trigger_when_active.get(gripper_name),
-                    "driver_joint_targets": dict(joint_targets),
-                    "thumb_abad_angle": gripper_cfg.get("thumb_abad_target"),
+                    "driver_joint_targets": {
+                        joint_name: joint_targets[joint_name]
+                        for joint_name in driver_joint_names
+                        if joint_name in joint_targets
+                    },
+                    "preset_mode": self.gripper_preset_mode.get(gripper_name),
+                    "selected_preset_index": self.gripper_preset_selected_index.get(gripper_name),
+                    "applied_preset_index": self.gripper_preset_applied_index.get(gripper_name),
+                    "preset_joint_targets": (
+                        dict(
+                            self.gripper_preset_targets.get(gripper_name, [])[self.gripper_preset_selected_index[gripper_name]]
+                        )
+                        if (
+                            gripper_name in self.gripper_preset_selected_index
+                            and self.gripper_preset_targets.get(gripper_name)
+                        )
+                        else {}
+                    ),
+                    "preset_ratio_values": (
+                        dict(
+                            self.gripper_preset_ratio_values.get(gripper_name, [])[self.gripper_preset_selected_index[gripper_name]]
+                        )
+                        if (
+                            gripper_name in self.gripper_preset_selected_index
+                            and self.gripper_preset_ratio_values.get(gripper_name)
+                        )
+                        else {}
+                    ),
                 }
             entry["hand_control"] = hand_control
         image_dict = self._capture_camera_frames(elapsed)

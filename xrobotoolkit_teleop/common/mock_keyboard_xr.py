@@ -83,6 +83,7 @@ class MockKeyboardXR:
             "Rotate source: I/K(+/-pitch), J/L(+/-yaw), U/O(+/-roll)\n"
             "Grip toggle:   G (selected controller)\n"
             "Trigger:       T increase, Y decrease (selected controller)\n"
+            "Preset button: C pulse X/A for selected controller\n"
             "Buttons:       B press B, P press right_axis_click\n"
             "Step tuning:   ] increase step, [ decrease step\n"
             "Help:          H\n"
@@ -196,6 +197,12 @@ class MockKeyboardXR:
                     self._key_values[trigger_key] = max(0.0, self._key_values[trigger_key] - 0.1)
             elif key == "b":
                 self._pulse_button("B")
+            elif key == "c":
+                prefix = self._selected_controller_prefix()
+                if prefix == "left":
+                    self._pulse_button("X")
+                elif prefix == "right":
+                    self._pulse_button("A")
             elif key == "p":
                 self._pulse_button("right_axis_click")
             elif key == "]":
