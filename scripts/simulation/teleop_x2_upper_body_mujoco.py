@@ -1,12 +1,18 @@
 from pathlib import Path
+import sys
 
 import tyro
 
-from xrobotoolkit_teleop.simulation.mujoco_teleop_controller import MujocoTeleopController
-
-
 def _find_repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
+
+
+_REPO_ROOT = _find_repo_root()
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+
+from xrobotoolkit_teleop.simulation.mujoco_teleop_controller import MujocoTeleopController
 
 
 def main(
@@ -14,6 +20,8 @@ def main(
     robot_urdf_path: str = str(_find_repo_root() / "X2_URDF" / "x2_upper_body_no_waist.urdf"),
     scale_factor: float = 1.0,
     visualize_placo: bool = True,
+    left_palm_offset_xyz: tuple[float, float, float] = (0.00, -0.0, -0.1),
+    right_palm_offset_xyz: tuple[float, float, float] = (0.00, 0.0, -0.1),
     left_tracker_serial: str = "",
     right_tracker_serial: str = "",
     control_profile: str = "balanced",
@@ -35,12 +43,30 @@ def main(
             "link_name": "left_wrist_roll_link",
             "pose_source": "left_controller",
             "control_trigger": "left_grip",
+            "activation_on_frames": 1,
+            "activation_off_frames": 4,
+            "control_point_offset_xyz": list(left_palm_offset_xyz),
+            "input_linear_deadband_m": 0.003,
+            "input_angular_deadband_rad": 0.04,
+            "input_position_alpha": 0.35,
+            "input_rotation_alpha": 0.25,
+            "max_target_linear_step_m": 0.03,
+            "max_target_angular_step_rad": 0.35,
             "vis_target": "left_target",
         },
         "right_arm": {
             "link_name": "right_wrist_roll_link",
             "pose_source": "right_controller",
             "control_trigger": "right_grip",
+            "activation_on_frames": 1,
+            "activation_off_frames": 4,
+            "control_point_offset_xyz": list(right_palm_offset_xyz),
+            "input_linear_deadband_m": 0.003,
+            "input_angular_deadband_rad": 0.04,
+            "input_position_alpha": 0.35,
+            "input_rotation_alpha": 0.25,
+            "max_target_linear_step_m": 0.03,
+            "max_target_angular_step_rad": 0.35,
             "vis_target": "right_target",
         },
     }
@@ -144,8 +170,8 @@ def main(
 
     print("Starting X2 upper-body teleoperation in MuJoCo...")
     print("Control mapping:")
-    print("  - Left controller -> Left arm (left_wrist_roll_link)")
-    print("  - Right controller -> Right arm (right_wrist_roll_link)")
+    print(f"  - Left controller -> Left arm (left_wrist_roll_link + palm offset {left_palm_offset_xyz})")
+    print(f"  - Right controller -> Right arm (right_wrist_roll_link + palm offset {right_palm_offset_xyz})")
     print("  - Hold grip buttons to activate arm control")
     print(f"  - control profile: {control_profile}, sim_steps_per_control: {sim_steps_per_control}")
     print(f"  - data logging: {enable_log_data}, log_dir: {log_dir}, log_freq: {log_freq}")

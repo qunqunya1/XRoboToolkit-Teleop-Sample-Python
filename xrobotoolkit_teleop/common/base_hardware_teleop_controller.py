@@ -31,6 +31,7 @@ class HardwareTeleopController(BaseTeleopController, ABC):
         log_freq: float,
         enable_camera: bool,
         camera_fps: int,
+        show_camera_window: bool = True,
         **kwargs,
     ):
         super().__init__(
@@ -53,6 +54,7 @@ class HardwareTeleopController(BaseTeleopController, ABC):
         self.enable_camera = enable_camera
         self.camera_interface: BaseCameraInterface = None
         self.camera_fps = camera_fps
+        self.show_camera_window = bool(show_camera_window)
 
         if self.visualize_placo:
             self._init_placo_viz()
@@ -196,72 +198,66 @@ class HardwareTeleopController(BaseTeleopController, ABC):
         try:
             while not stop_event.is_set():
                 self.camera_interface.update_frames()
-                if self._is_logging:
-                    if not window_created:
-                        cv2.namedWindow(window_name, cv2.WINDOW_AUTOSIZE)
-                        window_created = True
+                if not window_created:
+                    cv2.namedWindow(window_name, cv2.WINDOW_AUTOSIZE)
+                    window_created = True
 
-                    frames_dict = self.camera_interface.get_frames()
-                    if not frames_dict:
-                        time.sleep(1.0 / self.camera_fps)
-                        continue
-
-                    all_camera_rows = []
-                    sorted_camera_names = sorted(frames_dict.keys())
-
-                    for name in sorted_camera_names:
-                        frames = frames_dict[name]
-                        images_in_row = []
-
-                        color_image = frames.get("color")
-                        if color_image is not None:
-                            if len(color_image.shape) == 2:
-                                color_image = cv2.cvtColor(color_image, cv2.COLOR_GRAY2BGR)
-                            images_in_row.append(color_image)
-
-                        depth_image = frames.get("depth")
-                        if depth_image is not None:
-                            depth_colormap = cv2.applyColorMap(
-                                cv2.convertScaleAbs(depth_image, alpha=0.03),
-                                cv2.COLORMAP_JET,
-                            )
-                            images_in_row.append(depth_colormap)
-
-                        if images_in_row:
-                            all_camera_rows.append(np.hstack(images_in_row))
-
-                    if all_camera_rows:
-                        max_width = max(row.shape[1] for row in all_camera_rows)
-                        padded_rows = [
-                            (
-                                np.hstack(
-                                    [
-                                        row,
-                                        np.zeros(
-                                            (row.shape[0], max_width - row.shape[1], 3),
-                                            dtype=np.uint8,
-                                        ),
-                                    ]
-                                )
-                                if row.shape[1] < max_width
-                                else row
-                            )
-                            for row in all_camera_rows
-                        ]
-                        if padded_rows:
-                            combined_image = np.vstack(padded_rows)
-                            cv2.imshow(
-                                window_name,
-                                cv2.cvtColor(combined_image, cv2.COLOR_RGB2BGR),
-                            )
-
-                    if cv2.waitKey(1) & 0xFF == ord("q"):
-                        break
-                else:
-                    if window_created:
-                        cv2.destroyWindow(window_name)
-                        window_created = False
+                frames_dict = self.camera_interface.get_frames()
+                if not frames_dict:
                     time.sleep(1.0 / self.camera_fps)
+                    continue
+
+                all_camera_rows = []
+                sorted_camera_names = sorted(frames_dict.keys())
+
+                for name in sorted_camera_names:
+                    frames = frames_dict[name]
+                    images_in_row = []
+
+                    color_image = frames.get("color")
+                    if color_image is not None:
+                        if len(color_image.shape) == 2:
+                            color_image = cv2.cvtColor(color_image, cv2.COLOR_GRAY2BGR)
+                        images_in_row.append(color_image)
+
+                    depth_image = frames.get("depth")
+                    if depth_image is not None:
+                        depth_colormap = cv2.applyColorMap(
+                            cv2.convertScaleAbs(depth_image, alpha=0.03),
+                            cv2.COLORMAP_JET,
+                        )
+                        images_in_row.append(depth_colormap)
+
+                    if images_in_row:
+                        all_camera_rows.append(np.hstack(images_in_row))
+
+                if all_camera_rows:
+                    max_width = max(row.shape[1] for row in all_camera_rows)
+                    padded_rows = [
+                        (
+                            np.hstack(
+                                [
+                                    row,
+                                    np.zeros(
+                                        (row.shape[0], max_width - row.shape[1], 3),
+                                        dtype=np.uint8,
+                                    ),
+                                ]
+                            )
+                            if row.shape[1] < max_width
+                            else row
+                        )
+                        for row in all_camera_rows
+                    ]
+                    if padded_rows:
+                        combined_image = np.vstack(padded_rows)
+                        cv2.imshow(
+                            window_name,
+                            cv2.cvtColor(combined_image, cv2.COLOR_RGB2BGR),
+                        )
+
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    break
         finally:
             if self.camera_interface:
                 self.camera_interface.stop()
@@ -297,7 +293,7 @@ class HardwareTeleopController(BaseTeleopController, ABC):
                 args=(self._stop_event,),
             )
             threads.append(log_thread)
-        if self.enable_camera and self.camera_interface:
+        if self.enable_camera and self.camera_interface and self.show_camera_window:
             camera_thread = threading.Thread(
                 name="_camera_thread",
                 target=self._camera_thread,

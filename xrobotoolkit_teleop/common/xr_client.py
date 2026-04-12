@@ -1,23 +1,54 @@
 import importlib
 import os
 import sys
+import ctypes
 from pathlib import Path
 import numpy as np
 
-from xrobotoolkit_teleop.common.mock_keyboard_xr import MockKeyboardXR
-
 try:
     import xrobotoolkit_sdk as xrt
-except ImportError:
+except ImportError as exc:
     xrt = None
+    _XRT_IMPORT_ERROR = exc
+else:
+    _XRT_IMPORT_ERROR = None
+
+
+def _find_repo_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _preload_sdk_library(repo_root: Path) -> Path | None:
+    candidates = [
+        repo_root / "dependencies" / "XRoboToolkit-PC-Service-Pybind" / "lib" / "libPXREARobotSDK.so",
+        repo_root
+        / "dependencies"
+        / "XRoboToolkit-PC-Service-Pybind"
+        / "build"
+        / "lib.linux-x86_64-cpython-310"
+        / "libPXREARobotSDK.so",
+    ]
+    for lib_path in candidates:
+        if lib_path.exists():
+            ctypes.CDLL(str(lib_path), mode=ctypes.RTLD_GLOBAL)
+            return lib_path
+    return None
 
 
 def _try_import_xrt_from_local_paths():
     global xrt
+    global _XRT_IMPORT_ERROR
     if xrt is not None:
         return xrt
 
-    repo_root = Path(__file__).resolve().parents[2]
+    repo_root = _find_repo_root()
+    preloaded_lib = None
+    preload_errors: list[str] = []
+    try:
+        preloaded_lib = _preload_sdk_library(repo_root)
+    except OSError as exc:
+        preload_errors.append(f"{type(exc).__name__}: {exc}")
+
     candidate_paths = [
         repo_root / ".vendor",
         repo_root / "dependencies" / "XRoboToolkit-PC-Service-Pybind",
@@ -30,10 +61,31 @@ def _try_import_xrt_from_local_paths():
                 sys.path.insert(0, path_str)
             try:
                 xrt = importlib.import_module("xrobotoolkit_sdk")
+                location = getattr(xrt, "__file__", "<unknown>")
+                if preloaded_lib is not None:
+                    print(f"XRoboToolkit SDK initialized using native lib: {preloaded_lib}")
+                print(f"XRoboToolkit SDK Python module loaded from: {location}")
                 return xrt
-            except ImportError:
+            except ImportError as exc:
+                _XRT_IMPORT_ERROR = exc
                 continue
+
+    if preloaded_lib is None:
+        preload_msg = "SDK native library libPXREARobotSDK.so was not found under dependencies/."
+    else:
+        preload_msg = f"Preloaded SDK native library: {preloaded_lib}"
+
+    extra = f" preload_errors={preload_errors}" if preload_errors else ""
+    print(f"{preload_msg}{extra}")
+    if _XRT_IMPORT_ERROR is not None:
+        print(f"XRoboToolkit SDK import failed: {type(_XRT_IMPORT_ERROR).__name__}: {_XRT_IMPORT_ERROR}")
     return None
+
+
+def _create_mock_client():
+    from xrobotoolkit_teleop.common.mock_keyboard_xr import MockKeyboardXR
+
+    return MockKeyboardXR()
 
 
 class XrClient:
@@ -49,7 +101,7 @@ class XrClient:
         self._mock_client = None
 
         if self._use_mock:
-            self._mock_client = MockKeyboardXR()
+            self._mock_client = _create_mock_client()
             print("XrClient initialized in keyboard mock mode.")
             return
 
@@ -57,7 +109,7 @@ class XrClient:
             _try_import_xrt_from_local_paths()
 
         if xrt is None:
-            self._mock_client = MockKeyboardXR()
+            self._mock_client = _create_mock_client()
             self._use_mock = True
             print("xrobotoolkit_sdk not found. Falling back to keyboard mock mode.")
             return

@@ -74,3 +74,8 @@ data/
 
 third_party/
 dependencies/
+
+# ROS2 workspace artifacts
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
