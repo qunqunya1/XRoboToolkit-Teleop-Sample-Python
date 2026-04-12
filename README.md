@@ -78,6 +78,45 @@ End-to-end keyboard workflow (no headset required):
    python scripts/misc/convert_x2_sim_log_to_lerobot.py logs/x2_ultra_sim/<your_log>.pkl --output-dir datasets/x2_ultra_keyboard_lerobot
    ```
 
+### Running the Keyboard XR Simulator Client
+
+If you want to keep the official `XRoboToolkit-PC-Service -> xrobotoolkit_sdk -> XrClient` chain intact and drive teleop from a keyboard, run the standalone keyboard simulator client in a separate terminal:
+
+```bash
+python scripts/tools/keyboard_xr_unity_client.py
+```
+
+Default workflow:
+1. Start local `XRoboToolkit-PC-Service`.
+2. Start the keyboard simulator client:
+   ```bash
+   python scripts/tools/keyboard_xr_unity_client.py --host 127.0.0.1 --port 63901
+   ```
+3. Run any existing teleop script normally, for example:
+   ```bash
+   python scripts/simulation/teleop_x2_upper_body_mujoco.py
+   ```
+
+Useful CLI options:
+- `--device-sn KEYBOARD_SIM`
+- `--send-hz 60`
+- `--pos-step 0.01`
+- `--rot-step-deg 3.0`
+
+Keyboard simulator controls:
+- `1/2`: select left or right controller
+- `W/S`, `A/D`, `R/F`: move selected controller in XYZ
+- `I/K`, `J/L`, `U/O`: rotate selected controller in pitch/yaw/roll
+- `G`: toggle selected controller grip
+- `T/Y`: increase or decrease selected controller trigger
+- `8/5`, `4/6`, `0`: adjust joystick Y, joystick X, and reset joystick
+- `M`: pulse menu button
+- `C`: pulse joystick click
+- `V`: pulse primary button
+- `B`: pulse secondary button
+- `H`: show help
+- `Q`: quit
+
 ### Running the Placo Visualization Demo
 
 To run the teleoperation demo with a UR5e robot in Placo visualization:
