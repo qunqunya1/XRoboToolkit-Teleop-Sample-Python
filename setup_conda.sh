@@ -1,5 +1,36 @@
 #!/bin/bash
 
+set -e
+
+PRIMARY_PYPI_INDEX_URL="${PIP_INDEX_URL:-https://pypi.org/simple}"
+FALLBACK_PYPI_INDEX_URL="${PIP_FALLBACK_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
+
+uv_pip_install_with_fallback() {
+    local install_args=("$@")
+    local index_urls=("$PRIMARY_PYPI_INDEX_URL")
+
+    if [[ "$FALLBACK_PYPI_INDEX_URL" != "$PRIMARY_PYPI_INDEX_URL" ]]; then
+        index_urls+=("$FALLBACK_PYPI_INDEX_URL")
+    fi
+
+    local index_url
+    for index_url in "${index_urls[@]}"; do
+        echo "[INFO] Running: uv pip install ${install_args[*]}"
+        echo "[INFO] Using package index: $index_url"
+        if uv pip install --index-url "$index_url" "${install_args[@]}"; then
+            return 0
+        fi
+        echo "[WARN] Install failed via $index_url"
+    done
+
+    return 1
+}
+
+python_module_exists() {
+    local module_name="$1"
+    python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('$module_name') else 1)"
+}
+
 # Check the operating system
 OS_NAME=$(uname -s)
 OS_VERSION=""
@@ -95,7 +126,7 @@ elif [[ "$1" == "--install" ]]; then
         conda install -c conda-forge libstdcxx-ng -y
     fi
     pip install uv
-    uv pip install --upgrade pip
+    uv_pip_install_with_fallback --upgrade pip
 
     # Install the required packages
     rm -rf dependencies
@@ -111,11 +142,18 @@ elif [[ "$1" == "--install" ]]; then
     cd R5
     git checkout dev/python_pkg
     cd py/ARX_R5_python/
-    uv pip install .
+    uv_pip_install_with_fallback .
 
     cd ../../../..
 
-    uv pip install -e . || { echo "Failed to install xrobotoolkit_teleop with pip"; exit 1; }
+    if python_module_exists torch; then
+        echo "[INFO] torch is already installed. Skipping standalone torch install."
+    else
+        echo "[INFO] Installing torch separately before the main package to reduce retry failures."
+        uv_pip_install_with_fallback torch || { echo "Failed to install torch"; exit 1; }
+    fi
+
+    uv_pip_install_with_fallback -e . || { echo "Failed to install xrobotoolkit_teleop with pip"; exit 1; }
 
     echo -e "\n"
     echo -e "[INFO] xrobotoolkit_teleop is installed in conda environment '$ENV_NAME'.\n"

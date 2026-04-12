@@ -313,7 +313,9 @@ class MujocoTeleopController(BaseTeleopController):
                 u = float(np.clip(u, umin, umax))
             ctrl[i] = u
 
-        self.mj_data.ctrl = ctrl
+        # Use in-place assignment for MuJoCo control buffers. Some bindings / versions
+        # don't reliably apply replacing the property object wholesale.
+        self.mj_data.ctrl[:] = ctrl
 
         if self.visualize_placo:
             self._update_placo_viz()
@@ -439,7 +441,13 @@ class MujocoTeleopController(BaseTeleopController):
                 T_world_target = tf.identity_matrix()
                 T_world_target[:3, 3] = task.target_world
             else:
-                T_world_target = task.T_world_frame
+                link_target = task.T_world_frame
+                config = self.manipulator_config[name]
+                link_xyz = link_target[:3, 3].copy()
+                link_quat = tf.quaternion_from_matrix(link_target)
+                control_xyz, control_quat = self._link_pose_to_control_pose(config, link_xyz, link_quat)
+                T_world_target = tf.quaternion_matrix(control_quat)
+                T_world_target[:3, 3] = control_xyz
             mocap_idx = self.target_mocap_idx.get(name)
             if mocap_idx is not None and mocap_idx != -1:
                 self.mj_data.mocap_pos[mocap_idx] = T_world_target[:3, 3] + self.ik_world_offset
