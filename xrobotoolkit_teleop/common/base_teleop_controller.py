@@ -36,6 +36,8 @@ class BaseTeleopController(abc.ABC):
         enable_log_data: bool = False,
         log_dir: str = "logs",
         log_freq: float = 50,
+        validate_log_before_save: bool = False,
+        decode_images_on_log_validate: bool = True,
     ):
         self.robot_urdf_path = robot_urdf_path
         self.manipulator_config = manipulator_config
@@ -50,7 +52,11 @@ class BaseTeleopController(abc.ABC):
         self.log_dir = log_dir
         self.log_freq = log_freq
         if enable_log_data:
-            self.data_logger = DataLogger(log_dir=log_dir)
+            self.data_logger = DataLogger(
+                log_dir=log_dir,
+                validate_before_save=validate_log_before_save,
+                decode_images_on_validate=decode_images_on_log_validate,
+            )
 
         # Initial poses
         self.ref_ee_xyz = {name: None for name in manipulator_config.keys()}
@@ -185,6 +191,21 @@ class BaseTeleopController(abc.ABC):
                     tf.quaternion_about_axis(max_angular_step, axis),
                     prev_quat,
                 )
+
+        return limited_xyz, limited_quat
+
+    def _apply_workspace_limits(
+        self,
+        config: Dict[str, Any],
+        desired_xyz: np.ndarray,
+        desired_quat: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        limited_xyz = np.array(desired_xyz, dtype=float).copy()
+        limited_quat = np.array(desired_quat, dtype=float).copy()
+
+        workspace_min_z = config.get("workspace_min_z")
+        if workspace_min_z is not None:
+            limited_xyz[2] = max(limited_xyz[2], float(workspace_min_z))
 
         return limited_xyz, limited_quat
 
@@ -451,6 +472,11 @@ class BaseTeleopController(abc.ABC):
                     # Position-only control: only apply position delta
                     target_xyz = self.ref_ee_xyz[src_name] + delta_xyz
                     _, curr_control_quat = self._get_controlled_pose(config)
+                    target_xyz, curr_control_quat = self._apply_workspace_limits(
+                        config,
+                        target_xyz,
+                        curr_control_quat,
+                    )
                     link_target_xyz, _ = self._control_pose_to_link_pose(
                         config,
                         target_xyz,
@@ -467,6 +493,11 @@ class BaseTeleopController(abc.ABC):
                     )
                     target_xyz, target_quat = self._apply_target_step_limits(
                         src_name,
+                        config,
+                        target_xyz,
+                        target_quat,
+                    )
+                    target_xyz, target_quat = self._apply_workspace_limits(
                         config,
                         target_xyz,
                         target_quat,

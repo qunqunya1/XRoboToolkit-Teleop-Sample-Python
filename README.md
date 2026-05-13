@@ -185,7 +185,16 @@ Use the provided analysis script to verify data integrity and examine collected 
 python scripts/misc/test_data_log_analysis.py logs/<robot_name>/teleop_log_YYYYMMDD_HHMMSS_1.pkl
 ```
 
-This script will:
+Replay raw logs or converted LeRobot datasets to visually check camera quality and motion/action curves:
+
+```bash
+python scripts/misc/play_collected_data.py logs/<robot_name>/teleop_log_YYYYMMDD_HHMMSS_1.pkl
+python scripts/misc/play_collected_data.py datasets/x2_hardware_lerobot_v3
+```
+
+For a non-GUI summary check, add `--no-display`.
+
+The analysis script will:
 - Display available data fields and their types
 - Verify robot states and camera images are properly saved
 - Show sample entries and data statistics

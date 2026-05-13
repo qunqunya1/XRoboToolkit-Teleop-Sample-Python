@@ -14,6 +14,7 @@ matplotlib
 einops
 packaging
 h5py
+pyarrow
 tensorflow-datasets
 draccus
 

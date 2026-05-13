@@ -1,4 +1,5 @@
 import threading
+import sys
 
 import cv2
 import numpy as np
@@ -9,11 +10,6 @@ from sensor_msgs.msg import CompressedImage, Image
 from ...utils.image_utils import compress_image_to_jpg
 from .base_camera import BaseCameraInterface
 
-try:
-    from cv_bridge import CvBridge
-except Exception:
-    CvBridge = None
-
 
 CAMERA_QOS = QoSProfile(
     reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -21,6 +17,26 @@ CAMERA_QOS = QoSProfile(
     depth=5,
     durability=DurabilityPolicy.VOLATILE,
 )
+
+
+def _compress_depth_to_png(depth_image):
+    ok, encoded_img = cv2.imencode(".png", depth_image)
+    if not ok:
+        return None
+    return encoded_img.tobytes()
+
+
+def _encoding_to_dtype_and_channels(encoding: str):
+    normalized = encoding.lower()
+    if normalized in {"bgr8", "rgb8"}:
+        return np.uint8, 3
+    if normalized in {"mono8", "8uc1"}:
+        return np.uint8, 1
+    if normalized in {"mono16", "16uc1"}:
+        return np.uint16, 1
+    if normalized == "32fc1":
+        return np.float32, 1
+    return None, None
 
 
 class Ros2CameraInterface(Node, BaseCameraInterface):
@@ -37,6 +53,8 @@ class Ros2CameraInterface(Node, BaseCameraInterface):
         height: int = None,
         enable_compression: bool = True,
         jpg_quality: int = 85,
+        decode_compressed_for_display: bool = False,
+        raw_passthrough_for_logging: bool = False,
     ):
         Node.__init__(self, node_name)
         BaseCameraInterface.__init__(
@@ -46,10 +64,11 @@ class Ros2CameraInterface(Node, BaseCameraInterface):
         )
         self.camera_topics = camera_topics
         self.enable_depth = enable_depth
-        self.width = width
-        self.height = height
-        self.bridge = CvBridge() if CvBridge is not None else None
-        self._warned_depth_bridge = False
+        self.width = int(width) if width and int(width) > 0 else None
+        self.height = int(height) if height and int(height) > 0 else None
+        self.decode_compressed_for_display = bool(decode_compressed_for_display)
+        self.raw_passthrough_for_logging = bool(raw_passthrough_for_logging)
+        self._warned_raw_encodings = set()
 
         self.frames_dict = {}
         self.compressed_frames_dict = {}
@@ -98,7 +117,44 @@ class Ros2CameraInterface(Node, BaseCameraInterface):
             self.frames_dict[camera_name] = {}
             self.compressed_frames_dict[camera_name] = {}
 
+    def _image_msg_to_numpy(self, msg: Image):
+        dtype, channels = _encoding_to_dtype_and_channels(msg.encoding)
+        if dtype is None:
+            if msg.encoding not in self._warned_raw_encodings:
+                self.get_logger().warning(
+                    f"Unsupported raw image encoding '{msg.encoding}'; skipping frame."
+                )
+                self._warned_raw_encodings.add(msg.encoding)
+            return None
+
+        itemsize = np.dtype(dtype).itemsize
+        width = int(msg.width)
+        height = int(msg.height)
+        step = int(msg.step) if msg.step else width * channels * itemsize
+        row_items = step // itemsize
+        expected_items = height * row_items
+        image = np.frombuffer(msg.data, dtype=dtype, count=expected_items)
+        if bool(getattr(msg, "is_bigendian", False)) != (sys.byteorder == "big"):
+            image = image.byteswap()
+        image = image.reshape((height, row_items))
+        image = image[:, : width * channels]
+        if channels > 1:
+            image = image.reshape((height, width, channels))
+        else:
+            image = image.reshape((height, width))
+
+        if msg.encoding.lower() == "rgb8":
+            image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+        return image
+
     def _color_compressed_callback(self, msg: CompressedImage, camera_name: str):
+        if not self.decode_compressed_for_display and self.width is None and self.height is None:
+            with self.frames_lock:
+                self._ensure_camera_entry(camera_name)
+                if self.enable_compression:
+                    self.compressed_frames_dict[camera_name]["color"] = bytes(msg.data)
+            return
+
         np_arr = np.frombuffer(msg.data, np.uint8)
         color_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
         if color_image is None:
@@ -112,9 +168,29 @@ class Ros2CameraInterface(Node, BaseCameraInterface):
                 self.compressed_frames_dict[camera_name]["color"] = bytes(msg.data)
 
     def _color_raw_callback(self, msg: Image, camera_name: str):
-        if self.bridge is None:
+        if (
+            self.raw_passthrough_for_logging
+            and not self.enable_compression
+            and self.width is None
+            and self.height is None
+        ):
+            with self.frames_lock:
+                self._ensure_camera_entry(camera_name)
+                self.frames_dict[camera_name]["color"] = {
+                    "raw": bytes(msg.data),
+                    "encoding": str(msg.encoding),
+                    "width": int(msg.width),
+                    "height": int(msg.height),
+                    "step": int(msg.step),
+                    "is_bigendian": bool(getattr(msg, "is_bigendian", False)),
+                }
             return
-        color_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
+
+        color_image = self._image_msg_to_numpy(msg)
+        if color_image is None:
+            return
+        if color_image.ndim == 2:
+            color_image = cv2.cvtColor(color_image, cv2.COLOR_GRAY2BGR)
         color_image = self._resize_image(color_image)
 
         with self.frames_lock:
@@ -127,6 +203,13 @@ class Ros2CameraInterface(Node, BaseCameraInterface):
                 )
 
     def _depth_compressed_callback(self, msg: CompressedImage, camera_name: str):
+        if not self.decode_compressed_for_display and self.width is None and self.height is None:
+            with self.frames_lock:
+                self._ensure_camera_entry(camera_name)
+                if self.enable_compression:
+                    self.compressed_frames_dict[camera_name]["depth"] = bytes(msg.data)
+            return
+
         np_arr = np.frombuffer(msg.data, np.uint8)
         depth_image = cv2.imdecode(np_arr, cv2.IMREAD_UNCHANGED)
         if depth_image is None:
@@ -140,25 +223,34 @@ class Ros2CameraInterface(Node, BaseCameraInterface):
                 self.compressed_frames_dict[camera_name]["depth"] = bytes(msg.data)
 
     def _depth_raw_callback(self, msg: Image, camera_name: str):
-        if self.bridge is None:
-            if not self._warned_depth_bridge:
-                self.get_logger().warning(
-                    "cv_bridge is unavailable; skipping raw depth frames."
-                )
-                self._warned_depth_bridge = True
+        if (
+            self.raw_passthrough_for_logging
+            and not self.enable_compression
+            and self.width is None
+            and self.height is None
+        ):
+            with self.frames_lock:
+                self._ensure_camera_entry(camera_name)
+                self.frames_dict[camera_name]["depth"] = {
+                    "raw": bytes(msg.data),
+                    "encoding": str(msg.encoding),
+                    "width": int(msg.width),
+                    "height": int(msg.height),
+                    "step": int(msg.step),
+                    "is_bigendian": bool(getattr(msg, "is_bigendian", False)),
+                }
             return
 
-        depth_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding="passthrough")
+        depth_image = self._image_msg_to_numpy(msg)
+        if depth_image is None:
+            return
         depth_image = self._resize_image(depth_image)
 
         with self.frames_lock:
             self._ensure_camera_entry(camera_name)
             self.frames_dict[camera_name]["depth"] = depth_image
             if self.enable_compression:
-                self.compressed_frames_dict[camera_name]["depth"] = compress_image_to_jpg(
-                    depth_image,
-                    self.jpg_quality,
-                )
+                self.compressed_frames_dict[camera_name]["depth"] = _compress_depth_to_png(depth_image)
 
     def update_frames(self):
         pass
@@ -170,10 +262,20 @@ class Ros2CameraInterface(Node, BaseCameraInterface):
                 color_frame = frame_data.get("color")
                 depth_frame = frame_data.get("depth")
                 frames_dict[camera_name] = {
-                    "color": color_frame.copy() if color_frame is not None else None,
-                    "depth": depth_frame.copy() if self.enable_depth and depth_frame is not None else None,
+                    "color": self._copy_frame_value(color_frame),
+                    "depth": self._copy_frame_value(depth_frame) if self.enable_depth and depth_frame is not None else None,
                 }
             return frames_dict
+
+    @staticmethod
+    def _copy_frame_value(value):
+        if value is None:
+            return None
+        if isinstance(value, np.ndarray):
+            return value.copy()
+        if isinstance(value, dict) and "raw" in value:
+            return dict(value)
+        return value
 
     def get_compressed_frames(self):
         with self.frames_lock:
@@ -193,6 +295,6 @@ class Ros2CameraInterface(Node, BaseCameraInterface):
             color_frame = frame_data.get("color")
             depth_frame = frame_data.get("depth")
             return {
-                "color": color_frame.copy() if color_frame is not None else None,
-                "depth": depth_frame.copy() if self.enable_depth and depth_frame is not None else None,
+                "color": self._copy_frame_value(color_frame),
+                "depth": self._copy_frame_value(depth_frame) if self.enable_depth and depth_frame is not None else None,
             }

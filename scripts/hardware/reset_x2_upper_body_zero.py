@@ -119,6 +119,22 @@ def _clip_targets(
     return clipped
 
 
+def _build_zero_targets(
+    group_name: str,
+    joint_names: list[str],
+    command_specs: dict[str, JointCommandSpec],
+) -> dict[str, float]:
+    targets = {joint_name: 0.0 for joint_name in joint_names}
+    if group_name == "arm":
+        #targets["left_shoulder_yaw_joint"] = 0.5
+        targets["left_shoulder_yaw_joint"] = 0.1
+        targets["left_elbow_joint"] = -1.8
+        #targets["right_shoulder_yaw_joint"] = -0.5
+        targets["right_shoulder_yaw_joint"] = -0.1
+        targets["right_elbow_joint"] = -1.8
+    return _clip_targets(targets, command_specs)
+
+
 def main(
     arm_state_topic: str = DEFAULT_ARM_STATE_TOPIC,
     arm_command_topic: str = DEFAULT_ARM_COMMAND_TOPIC,
@@ -214,8 +230,9 @@ def main(
             for group in group_configs
         }
         zero_targets = {
-            group["group_name"]: _clip_targets(
-                {joint_name: 0.0 for joint_name in group["joint_names"]},
+            group["group_name"]: _build_zero_targets(
+                group["group_name"],
+                group["joint_names"],
                 command_specs,
             )
             for group in group_configs

@@ -17,15 +17,27 @@ except ImportError:
 
 try:
     import rclpy
-    from aimdk_msgs.msg import JointCommand, JointCommandArray, JointStateArray
+    from aimdk_msgs.msg import (
+        HandCommand,
+        HandCommandArray,
+        HandType,
+        JointCommand,
+        JointCommandArray,
+        JointStateArray,
+        MessageHeader,
+    )
     from rclpy.executors import MultiThreadedExecutor
     from rclpy.node import Node
     from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 except ImportError as exc:  # pragma: no cover - depends on ROS2 runtime
     rclpy = None
+    HandCommand = None
+    HandCommandArray = None
+    HandType = None
     JointCommand = None
     JointCommandArray = None
     JointStateArray = None
+    MessageHeader = None
     MultiThreadedExecutor = None
     Node = object
     DurabilityPolicy = None
@@ -56,7 +68,14 @@ DEFAULT_X2_MANIPULATOR_CONFIG = {
     "left_arm": {
         "link_name": "left_wrist_roll_link",
         "pose_source": "left_controller",
-        "control_trigger": ["left_grip", "left_trigger"],
+        "control_trigger": "left_grip",
+        "gripper_config": {
+            "type": "parallel",
+            "gripper_trigger": "left_trigger",
+            "joint_names": ["left_hand"],
+            "open_pos": [1.0],
+            "close_pos": [0.0],
+        },
         "control_point_offset_xyz": [0.0, 0.0, -0.1],
         "activation_on_frames": 1,
         "activation_off_frames": 4,
@@ -66,11 +85,19 @@ DEFAULT_X2_MANIPULATOR_CONFIG = {
         "input_rotation_alpha": 0.25,
         "max_target_linear_step_m": 0.03,
         "max_target_angular_step_rad": 0.35,
+        "workspace_min_z": 0.0,
     },
     "right_arm": {
         "link_name": "right_wrist_roll_link",
         "pose_source": "right_controller",
-        "control_trigger": ["right_grip", "right_trigger"],
+        "control_trigger": "right_grip",
+        "gripper_config": {
+            "type": "parallel",
+            "gripper_trigger": "right_trigger",
+            "joint_names": ["right_hand"],
+            "open_pos": [1.0],
+            "close_pos": [0.0],
+        },
         "control_point_offset_xyz": [0.0, 0.0, -0.1],
         "activation_on_frames": 1,
         "activation_off_frames": 4,
@@ -80,6 +107,7 @@ DEFAULT_X2_MANIPULATOR_CONFIG = {
         "input_rotation_alpha": 0.25,
         "max_target_linear_step_m": 0.03,
         "max_target_angular_step_rad": 0.35,
+        "workspace_min_z": 0.0,
     },
 }
 
@@ -87,8 +115,11 @@ DEFAULT_ARM_STATE_TOPIC = "/aima/hal/joint/arm/state"
 DEFAULT_ARM_COMMAND_TOPIC = "/aima/hal/joint/arm/command"
 DEFAULT_HEAD_STATE_TOPIC = "/aima/hal/joint/head/state"
 DEFAULT_HEAD_COMMAND_TOPIC = "/aima/hal/joint/head/command"
+DEFAULT_HAND_COMMAND_TOPIC = "/aima/hal/joint/hand/command"
 DEFAULT_X2_CAMERA_COLOR_TOPICS = (
-    "head_front=/aima/hal/sensor/rgbd_head_front/rgb_image/compressed"
+    "head_front=/aima/hal/sensor/rgbd_head_front/rgb_image,"
+    "right_wrist=/right/rgb/image_raw,"
+    "left_wrist=/left/rgb/image_raw"
 )
 DEFAULT_X2_CAMERA_DEPTH_TOPICS = ""
 
@@ -421,6 +452,44 @@ class OnlineRuckigSmoother:
         return smoothed_positions, smoothed_velocities
 
 
+class Ros2HandCommandInterface(Node):
+    def __init__(self, node_name: str, command_topic: str):
+        super().__init__(node_name)
+        self._pub = self.create_publisher(
+            HandCommandArray,
+            command_topic,
+            PUBLISHER_QOS,
+        )
+
+    def publish_command(self, left_position: float, right_position: float):
+        msg = HandCommandArray()
+        msg.header = MessageHeader()
+        if hasattr(msg.header, "stamp"):
+            msg.header.stamp = self.get_clock().now().to_msg()
+
+        left_hand = HandCommand()
+        left_hand.name = "left_hand"
+        left_hand.position = float(left_position)
+        left_hand.velocity = 1.0
+        left_hand.acceleration = 1.0
+        left_hand.deceleration = 1.0
+        left_hand.effort = 1.0
+
+        right_hand = HandCommand()
+        right_hand.name = "right_hand"
+        right_hand.position = float(right_position)
+        right_hand.velocity = 1.0
+        right_hand.acceleration = 1.0
+        right_hand.deceleration = 1.0
+        right_hand.effort = 1.0
+
+        msg.left_hand_type = HandType(value=HandType.CLAW)
+        msg.right_hand_type = HandType(value=HandType.CLAW)
+        msg.left_hands = [left_hand]
+        msg.right_hands = [right_hand]
+        self._pub.publish(msg)
+
+
 class X2Ros2TeleopController(HardwareTeleopController):
     def __init__(
         self,
@@ -430,6 +499,7 @@ class X2Ros2TeleopController(HardwareTeleopController):
         arm_command_topic: str = DEFAULT_ARM_COMMAND_TOPIC,
         head_state_topic: str = DEFAULT_HEAD_STATE_TOPIC,
         head_command_topic: str = DEFAULT_HEAD_COMMAND_TOPIC,
+        hand_command_topic: str = DEFAULT_HAND_COMMAND_TOPIC,
         model_to_hardware_joint_map: Optional[Dict[str, str]] = None,
         command_specs: Optional[Dict[str, JointCommandSpec]] = None,
         R_headset_world: np.ndarray = R_HEADSET_TO_WORLD,
@@ -437,8 +507,10 @@ class X2Ros2TeleopController(HardwareTeleopController):
         visualize_placo: bool = False,
         control_rate_hz: int = 100,
         enable_log_data: bool = True,
-        log_dir: str = "logs/x2_upper_body_hardware",
-        log_freq: float = 50.0,
+        log_dir: str = "/media/xlq/ESD-USB",
+        log_freq: float = 15.0,
+        validate_log_before_save: bool = True,
+        decode_images_on_log_validate: bool = True,
         enable_camera: bool = False,
         camera_fps: int = 30,
         show_camera_window: bool = True,
@@ -449,7 +521,8 @@ class X2Ros2TeleopController(HardwareTeleopController):
         camera_enable_depth: bool = False,
         camera_enable_compression: bool = True,
         camera_jpg_quality: int = 85,
-        enable_head_tracking: bool = True,
+        camera_raw_passthrough_for_logging: bool = False,
+        enable_head_tracking: bool = False,
         enable_head_state_feedback: bool = False,
         head_yaw_scale: float = 1.0,
         head_pitch_scale: float = 1.0,
@@ -481,6 +554,7 @@ class X2Ros2TeleopController(HardwareTeleopController):
         self.arm_command_topic = arm_command_topic
         self.head_state_topic = head_state_topic
         self.head_command_topic = head_command_topic
+        self.hand_command_topic = hand_command_topic
         self.model_to_hardware_joint_map = model_to_hardware_joint_map or DEFAULT_MODEL_TO_HARDWARE_JOINT_MAP.copy()
         self.command_specs = command_specs or DEFAULT_HARDWARE_COMMAND_SPECS.copy()
         self.enable_head_tracking = enable_head_tracking
@@ -492,6 +566,7 @@ class X2Ros2TeleopController(HardwareTeleopController):
         self.camera_enable_depth = bool(camera_enable_depth)
         self.camera_enable_compression = bool(camera_enable_compression)
         self.camera_jpg_quality = int(camera_jpg_quality)
+        self.camera_raw_passthrough_for_logging = bool(camera_raw_passthrough_for_logging)
         self.head_yaw_scale = head_yaw_scale
         self.head_pitch_scale = head_pitch_scale
         self.initial_state_timeout_s = initial_state_timeout_s
@@ -536,6 +611,14 @@ class X2Ros2TeleopController(HardwareTeleopController):
         self.arm_return_zero_targets = {
             joint_name: self._clip_target(joint_name, 0.0) for joint_name in self.arm_hardware_joint_names
         }
+        self.arm_return_zero_targets.update(
+            {
+                "left_shoulder_yaw_joint": self._clip_target("left_shoulder_yaw_joint", 0.1),
+                "left_elbow_joint": self._clip_target("left_elbow_joint", -1.8),
+                "right_shoulder_yaw_joint": self._clip_target("right_shoulder_yaw_joint", -0.1),
+                "right_elbow_joint": self._clip_target("right_elbow_joint", -1.8),
+            }
+        )
         self._validate_configuration()
 
         self._ros2_setup_complete = False
@@ -543,9 +626,12 @@ class X2Ros2TeleopController(HardwareTeleopController):
         self._spin_thread = None
         self.arm_interface: Optional[Ros2JointGroupInterface] = None
         self.head_interface: Optional[Ros2JointGroupInterface] = None
+        self.hand_interface: Optional[Ros2HandCommandInterface] = None
         self.camera_interface: Optional[Ros2CameraInterface] = None
         self._prev_arm_targets: Optional[Dict[str, float]] = None
         self._prev_head_targets: Optional[Dict[str, float]] = None
+        self._prev_hand_targets = {"left_hand": 1.0, "right_hand": 1.0}
+        self._last_active_state = {name: False for name in manipulator_config.keys()}
         self.arm_joint_offsets: Dict[str, int] = {}
         self.head_joint_offsets: Dict[str, int] = {}
         self.head_target_positions = {joint_name: 0.0 for joint_name in self.head_hardware_joint_names}
@@ -582,6 +668,8 @@ class X2Ros2TeleopController(HardwareTeleopController):
             enable_log_data=enable_log_data,
             log_dir=log_dir,
             log_freq=log_freq,
+            validate_log_before_save=validate_log_before_save,
+            decode_images_on_log_validate=decode_images_on_log_validate,
             enable_camera=enable_camera,
             camera_fps=camera_fps,
             show_camera_window=show_camera_window,
@@ -616,10 +704,15 @@ class X2Ros2TeleopController(HardwareTeleopController):
             joint_names=self.head_hardware_joint_names,
             enable_state_subscription=self.enable_head_state_feedback,
         )
+        self.hand_interface = Ros2HandCommandInterface(
+            node_name="x2_hand_ros2_interface",
+            command_topic=self.hand_command_topic,
+        )
 
         self._executor = MultiThreadedExecutor()
         self._executor.add_node(self.arm_interface)
         self._executor.add_node(self.head_interface)
+        self._executor.add_node(self.hand_interface)
         self._spin_thread = threading.Thread(target=self._executor.spin, name="x2_ros2_spin", daemon=True)
         self._spin_thread.start()
 
@@ -708,6 +801,7 @@ class X2Ros2TeleopController(HardwareTeleopController):
                 height=self.camera_height,
                 enable_compression=self.camera_enable_compression,
                 jpg_quality=self.camera_jpg_quality,
+                raw_passthrough_for_logging=self.camera_raw_passthrough_for_logging,
             )
             self.camera_interface.start()
             if self._executor is not None:
@@ -820,6 +914,7 @@ class X2Ros2TeleopController(HardwareTeleopController):
                     self._update_gripper_target()
                     self._pre_ik_update()
                     self._update_ik()
+                    self._handle_activation_edges()
                     if self.visualize_placo:
                         self._update_placo_viz()
             except RuntimeError as exc:
@@ -897,12 +992,24 @@ class X2Ros2TeleopController(HardwareTeleopController):
             clipped_targets[hardware_joint_name] = self._clip_target(hardware_joint_name, q_target)
         return raw_targets, clipped_targets
 
+    def _arm_is_active_or_pending(self, arm_name: str) -> bool:
+        if self.active.get(arm_name, False):
+            return True
+
+        config = self.manipulator_config.get(arm_name, {})
+        activation_mode = str(config.get("activation_mode", "analog")).strip().lower()
+        if activation_mode in {"always_on", "always", "on"}:
+            return True
+
+        threshold = float(config.get("activation_threshold", 0.9))
+        return self._get_control_signal_value(config.get("control_trigger")) > threshold
+
     def _apply_inactive_arm_zero_targets(self, targets: Dict[str, float]) -> Dict[str, float]:
         adjusted_targets = dict(targets)
-        if not self.active.get("left_arm", False):
+        if not self._arm_is_active_or_pending("left_arm"):
             for joint_name in self.left_arm_hardware_joint_names:
                 adjusted_targets[joint_name] = self.arm_return_zero_targets[joint_name]
-        if not self.active.get("right_arm", False):
+        if not self._arm_is_active_or_pending("right_arm"):
             for joint_name in self.right_arm_hardware_joint_names:
                 adjusted_targets[joint_name] = self.arm_return_zero_targets[joint_name]
         return adjusted_targets
@@ -916,7 +1023,7 @@ class X2Ros2TeleopController(HardwareTeleopController):
             return dict(targets)
 
         limited_targets = dict(targets)
-        if not self.active.get("left_arm", False):
+        if not self._arm_is_active_or_pending("left_arm"):
             for joint_name in self.left_arm_hardware_joint_names:
                 ref_target = float(reference_targets.get(joint_name, limited_targets[joint_name]))
                 limited_targets[joint_name] = float(
@@ -926,7 +1033,7 @@ class X2Ros2TeleopController(HardwareTeleopController):
                         ref_target + self.inactive_arm_return_max_step_rad,
                     )
                 )
-        if not self.active.get("right_arm", False):
+        if not self._arm_is_active_or_pending("right_arm"):
             for joint_name in self.right_arm_hardware_joint_names:
                 ref_target = float(reference_targets.get(joint_name, limited_targets[joint_name]))
                 limited_targets[joint_name] = float(
@@ -1011,7 +1118,10 @@ class X2Ros2TeleopController(HardwareTeleopController):
         }
 
         if not self.enable_head_tracking:
-            self.head_target_positions = targets
+            self.head_target_positions = {
+                joint_name: self._clip_target(joint_name, 0.0)
+                for joint_name in self.head_hardware_joint_names
+            }
             return
 
         try:
@@ -1032,6 +1142,13 @@ class X2Ros2TeleopController(HardwareTeleopController):
 
     def _pre_ik_update(self):
         self._update_head_targets()
+
+    def _handle_activation_edges(self):
+        for arm_name in ("left_arm", "right_arm"):
+            is_active = bool(self.active.get(arm_name, False))
+            if is_active and not self._last_active_state.get(arm_name, False):
+                self._prev_arm_targets = None
+            self._last_active_state[arm_name] = is_active
 
     def _check_software_estop(self) -> bool:
         if self._software_estop_triggered:
@@ -1165,6 +1282,13 @@ class X2Ros2TeleopController(HardwareTeleopController):
                 joint_velocities=head_velocities,
                 command_specs=self.command_specs,
             )
+            hand_targets = self._build_hand_targets()
+            if self.hand_interface is not None:
+                self.hand_interface.publish_command(
+                    left_position=hand_targets["left_hand"],
+                    right_position=hand_targets["right_hand"],
+                )
+            self._prev_hand_targets = dict(hand_targets)
             self._maybe_print_targets(
                 raw_arm_targets,
                 clipped_arm_targets,
@@ -1175,11 +1299,27 @@ class X2Ros2TeleopController(HardwareTeleopController):
             )
             self._prev_head_targets = dict(self.head_target_positions)
 
+    def _build_hand_targets(self) -> Dict[str, float]:
+        hand_targets = {"left_hand": 1.0, "right_hand": 1.0}
+        for arm_name, config in self.manipulator_config.items():
+            gripper_config = config.get("gripper_config")
+            if not gripper_config:
+                continue
+            joint_name = gripper_config["joint_names"][0]
+            target_value = float(self.gripper_pos_target[arm_name][joint_name])
+            if arm_name == "left_arm":
+                hand_targets["left_hand"] = float(np.clip(target_value, 0.0, 1.0))
+            elif arm_name == "right_arm":
+                hand_targets["right_hand"] = float(np.clip(target_value, 0.0, 1.0))
+        return hand_targets
+
     def _get_robot_state_for_logging(self) -> Dict:
+        arm_state = self.arm_interface.get_joint_positions()
+        arm_command = self._prev_arm_targets if self._prev_arm_targets else arm_state
         return {
-            "arm_state": self.arm_interface.get_joint_positions(),
+            "arm_state": arm_state,
             "arm_velocity": self.arm_interface.get_joint_velocities(),
-            "arm_command": self._prev_arm_targets or {},
+            "arm_command": dict(arm_command),
             "head_state": (
                 self.head_interface.get_joint_positions()
                 if self.enable_head_state_feedback
@@ -1191,6 +1331,11 @@ class X2Ros2TeleopController(HardwareTeleopController):
                 else {joint_name: 0.0 for joint_name in self.head_hardware_joint_names}
             ),
             "head_command": self._prev_head_targets or {},
+            "hand_command": dict(self._prev_hand_targets),
+            "hand_trigger_raw": {
+                "left_hand": self.gripper_trigger_value.get("left_arm"),
+                "right_hand": self.gripper_trigger_value.get("right_arm"),
+            },
         }
 
     def _get_camera_frame_for_logging(self) -> Dict:
@@ -1211,7 +1356,7 @@ class X2Ros2TeleopController(HardwareTeleopController):
                 pass
 
         if self._executor is not None:
-            for interface in (self.camera_interface, self.arm_interface, self.head_interface):
+            for interface in (self.camera_interface, self.arm_interface, self.head_interface, self.hand_interface):
                 if interface is not None:
                     try:
                         self._executor.remove_node(interface)
@@ -1220,7 +1365,7 @@ class X2Ros2TeleopController(HardwareTeleopController):
             self._executor.shutdown()
             self._executor = None
 
-        for interface in (self.camera_interface, self.arm_interface, self.head_interface):
+        for interface in (self.camera_interface, self.arm_interface, self.head_interface, self.hand_interface):
             if interface is not None:
                 interface.destroy_node()
         self.camera_interface = None

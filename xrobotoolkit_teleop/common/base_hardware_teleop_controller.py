@@ -32,6 +32,8 @@ class HardwareTeleopController(BaseTeleopController, ABC):
         enable_camera: bool,
         camera_fps: int,
         show_camera_window: bool = True,
+        validate_log_before_save: bool = False,
+        decode_images_on_log_validate: bool = True,
         **kwargs,
     ):
         super().__init__(
@@ -45,6 +47,8 @@ class HardwareTeleopController(BaseTeleopController, ABC):
             enable_log_data=enable_log_data,
             log_dir=log_dir,
             log_freq=log_freq,
+            validate_log_before_save=validate_log_before_save,
+            decode_images_on_log_validate=decode_images_on_log_validate,
         )
 
         self._start_time = 0
