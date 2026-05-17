@@ -102,6 +102,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-height", type=int, default=900, help="Maximum mosaic height.")
     parser.add_argument("--trail", type=int, default=180, help="Number of recent samples shown in curves.")
     parser.add_argument("--no-display", action="store_true", help="Print quality summary and validate readable frames without opening a window.")
+    parser.add_argument("--native-display", action="store_true", help="Show each camera in its own unscaled native-resolution window.")
     parser.add_argument("--decode-images", action="store_true", help="Decode every raw log image during health check.")
     return parser.parse_args()
 
@@ -433,6 +434,18 @@ def validate_readable_frames(data: PlaybackData) -> None:
     if data.frames is not None:
         readable = sum(1 for frame_set in data.frames if frame_set)
         print(f"  readable image timesteps: {readable}/{len(data.frames)}")
+        camera_counts: dict[str, int] = {}
+        camera_shapes: dict[str, set[tuple[int, ...]]] = {}
+        for frame_set in data.frames:
+            for camera_name, frame in frame_set.items():
+                camera_counts[camera_name] = camera_counts.get(camera_name, 0) + 1
+                camera_shapes.setdefault(camera_name, set()).add(tuple(int(x) for x in frame.shape))
+        if camera_counts:
+            print("  raw image resolutions:")
+            for camera_name in sorted(camera_counts):
+                shapes = sorted(camera_shapes.get(camera_name, set()))
+                shape_text = ", ".join(format_image_shape(shape) for shape in shapes)
+                print(f"    {camera_name}: frames={camera_counts[camera_name]}, shape={shape_text}")
         return
     if not data.video_paths:
         print("  readable videos: none")
@@ -445,6 +458,16 @@ def validate_readable_frames(data: PlaybackData) -> None:
         shape = "unknown" if frame is None else f"{frame.shape[1]}x{frame.shape[0]}"
         status = "OK" if ok else "FAIL"
         print(f"  video {camera_name}: {status}, frames={total}, shape={shape}, path={video_path}")
+
+
+def format_image_shape(shape: tuple[int, ...]) -> str:
+    if len(shape) >= 3:
+        height, width, channels = shape[:3]
+        return f"{width}x{height}x{channels} (HWC={height},{width},{channels})"
+    if len(shape) == 2:
+        height, width = shape
+        return f"{width}x{height} (HW={height},{width})"
+    return str(shape)
 
 
 def make_mosaic(frames: dict[str, np.ndarray], max_width: int, max_height: int) -> np.ndarray:
@@ -534,6 +557,10 @@ def frame_source(data: PlaybackData):
 
 
 def play(data: PlaybackData, args: argparse.Namespace) -> None:
+    if args.native_display:
+        play_native(data, args)
+        return
+
     print("\nControls: space pause/resume, n step, q/esc quit")
     delay = max(1.0 / max(data.fps * args.speed, 1.0e-6), 0.001)
     paused = False
@@ -567,6 +594,44 @@ def play(data: PlaybackData, args: argparse.Namespace) -> None:
                 index += 1
                 break
     cv2.destroyWindow(window_name)
+
+
+def play_native(data: PlaybackData, args: argparse.Namespace) -> None:
+    print("\nNative display: each camera window shows decoded pixels without resizing.")
+    print("Controls: space pause/resume, n step, q/esc quit")
+    delay = max(1.0 / max(data.fps * args.speed, 1.0e-6), 0.001)
+    paused = False
+    cached_frames = list(frame_source(data))
+    created_windows: set[str] = set()
+    index = 0
+
+    while index < data.length:
+        frames = cached_frames[index] if index < len(cached_frames) else {}
+        for camera_name, frame in sorted(frames.items()):
+            window_name = f"XRoboToolkit native - {camera_name}"
+            if window_name not in created_windows:
+                cv2.namedWindow(window_name, cv2.WINDOW_AUTOSIZE)
+                created_windows.add(window_name)
+            cv2.imshow(window_name, frame)
+
+        start = time.time()
+        while True:
+            key = cv2.waitKey(30 if paused else 1) & 0xFF
+            if key in (ord("q"), 27):
+                for window_name in created_windows:
+                    cv2.destroyWindow(window_name)
+                return
+            if key == ord(" "):
+                paused = not paused
+            if key == ord("n"):
+                index += 1
+                break
+            if not paused and time.time() - start >= delay:
+                index += 1
+                break
+
+    for window_name in created_windows:
+        cv2.destroyWindow(window_name)
 
 
 def main() -> int:

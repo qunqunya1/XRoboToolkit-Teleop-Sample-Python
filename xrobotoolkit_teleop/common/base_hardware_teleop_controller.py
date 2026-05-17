@@ -118,9 +118,14 @@ class HardwareTeleopController(BaseTeleopController, ABC):
         data_entry.update(self._get_robot_state_for_logging())
 
         if self.enable_camera and self.camera_interface:
+            self.camera_interface.update_frames()
             frames = self._get_camera_frame_for_logging()
-            if frames:
-                data_entry["image"] = frames
+            expected_camera_names = set(getattr(self.camera_interface, "expected_camera_names", set()))
+            if expected_camera_names and not expected_camera_names.issubset(frames.keys()):
+                return
+            if not frames:
+                return
+            data_entry["image"] = frames
 
         self.data_logger.add_entry(data_entry)
 

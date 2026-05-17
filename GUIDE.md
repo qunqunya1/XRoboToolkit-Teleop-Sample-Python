@@ -114,7 +114,7 @@ PYTHONNOUSERSITE=1 python3 scripts/hardware/reset_x2_upper_body_zero.py \
 
 ```bash
 PYTHONNOUSERSITE=1 python3 scripts/hardware/teleop_x2_upper_body_hardware.py \
-  --log-dir /media/xlq/ESD-USB \
+  --log-dir /media/xlq/8E34-513F/log
   --control-rate-hz 30
 ```
 
@@ -302,6 +302,7 @@ python3 scripts/misc/check_teleop_log_health.py logs/x2_upper_body_hardware
 ```bash
 python3 scripts/misc/play_collected_data.py \
   logs/x2_upper_body_hardware/teleop_log_20260430_204213_67.pkl
+
 ```
 
 回放窗口会显示：
@@ -430,7 +431,7 @@ python3 scripts/misc/convert_x2_hardware_log_to_lerobot_v3.py \
 
 ```bash
 python3 scripts/misc/convert_x2_hardware_log_to_lerobot_v3.py \
-  logs/x2_upper_body_hardware/teleop_log_20260428_184946_1.pkl \
+  /media/xlq/8E34-513F/log/teleop_log_20260517_100654_1.pkl\
   --output-dir datasets/x2_hardware_lerobot_v3 \
   --camera-names head_front,right_wrist,left_wrist \
   --include-hands \

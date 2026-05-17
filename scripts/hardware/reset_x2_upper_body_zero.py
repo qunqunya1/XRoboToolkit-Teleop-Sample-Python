@@ -72,7 +72,7 @@ LOWER_BODY_COMMAND_SPECS = {
     "right_ankle_pitch_joint": JointCommandSpec(-0.80285, 0.45378, 40.0, 4.0),
     "right_ankle_roll_joint": JointCommandSpec(-0.2618, 0.2618, 20.0, 2.0),
     "waist_yaw_joint": JointCommandSpec(-3.4296, 2.3824, 60.0, 4.0),
-    "waist_pitch_joint": JointCommandSpec(-0.17453, 0.17453, 120.0, 4.0),
+    "waist_pitch_joint": JointCommandSpec(-0.17453, 0.17453, 160.0, 4.0),
     "waist_roll_joint": JointCommandSpec(-0.48869, 0.48869, 60.0, 4.0),
 }
 

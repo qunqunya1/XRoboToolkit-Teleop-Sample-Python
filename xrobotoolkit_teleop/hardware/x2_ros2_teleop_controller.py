@@ -16,6 +16,11 @@ except ImportError:
     Ros2CameraInterface = None
 
 try:
+    from xrobotoolkit_teleop.hardware.interface.video_stream_camera import VideoStreamCameraInterface
+except ImportError:
+    VideoStreamCameraInterface = None
+
+try:
     import rclpy
     from aimdk_msgs.msg import (
         HandCommand,
@@ -116,12 +121,11 @@ DEFAULT_ARM_COMMAND_TOPIC = "/aima/hal/joint/arm/command"
 DEFAULT_HEAD_STATE_TOPIC = "/aima/hal/joint/head/state"
 DEFAULT_HEAD_COMMAND_TOPIC = "/aima/hal/joint/head/command"
 DEFAULT_HAND_COMMAND_TOPIC = "/aima/hal/joint/hand/command"
-DEFAULT_X2_CAMERA_COLOR_TOPICS = (
-    "head_front=/aima/hal/sensor/rgbd_head_front/rgb_image,"
-    "right_wrist=/right/rgb/image_raw,"
-    "left_wrist=/left/rgb/image_raw"
-)
+DEFAULT_X2_CAMERA_COLOR_TOPICS = "head_front=/aima/hal/sensor/rgbd_head_front/rgb_image/compressed"
 DEFAULT_X2_CAMERA_DEPTH_TOPICS = ""
+DEFAULT_X2_CAMERA_VIDEO_STREAMS = "right_wrist=h265_udp://0.0.0.0:5600,left_wrist=h265_udp://0.0.0.0:5602"
+DEFAULT_X2_CAMERA_VIDEO_WIDTH = 640
+DEFAULT_X2_CAMERA_VIDEO_HEIGHT = 480
 
 if QoSProfile is not None:
     SUBSCRIBER_QOS = QoSProfile(
@@ -195,6 +199,54 @@ class JointCommandSpec:
     upper_limit: float
     kp: float
     kd: float
+
+
+class CompositeCameraInterface:
+    def __init__(self, interfaces):
+        self.interfaces = [interface for interface in interfaces if interface is not None]
+        self.expected_camera_names = set()
+        for interface in self.interfaces:
+            self.expected_camera_names.update(getattr(interface, "expected_camera_names", set()))
+        self.enable_compression = all(
+            bool(getattr(interface, "enable_compression", False))
+            for interface in self.interfaces
+        )
+
+    def start(self):
+        for interface in self.interfaces:
+            interface.start()
+
+    def stop(self):
+        for interface in self.interfaces:
+            interface.stop()
+
+    def update_frames(self):
+        for interface in self.interfaces:
+            interface.update_frames()
+
+    def get_frames(self):
+        frames = {}
+        for interface in self.interfaces:
+            frames.update(interface.get_frames())
+        return frames
+
+    def get_frame(self, identifier: str):
+        for interface in self.interfaces:
+            frame = interface.get_frame(identifier)
+            if frame and frame.get("color") is not None:
+                return frame
+        return {"color": None, "depth": None}
+
+    def get_compressed_frames(self):
+        frames = {}
+        for interface in self.interfaces:
+            frames.update(interface.get_compressed_frames())
+        return frames
+
+    def destroy_node(self):
+        for interface in self.interfaces:
+            if hasattr(interface, "destroy_node"):
+                interface.destroy_node()
 
 
 # Limits and gains come from motocontrol.py so the hardware topic interface stays aligned
@@ -516,8 +568,11 @@ class X2Ros2TeleopController(HardwareTeleopController):
         show_camera_window: bool = True,
         camera_color_topics: str = DEFAULT_X2_CAMERA_COLOR_TOPICS,
         camera_depth_topics: str = DEFAULT_X2_CAMERA_DEPTH_TOPICS,
+        camera_video_streams: str = DEFAULT_X2_CAMERA_VIDEO_STREAMS,
         camera_width: int = 424,
         camera_height: int = 240,
+        camera_video_width: int = DEFAULT_X2_CAMERA_VIDEO_WIDTH,
+        camera_video_height: int = DEFAULT_X2_CAMERA_VIDEO_HEIGHT,
         camera_enable_depth: bool = False,
         camera_enable_compression: bool = True,
         camera_jpg_quality: int = 85,
@@ -561,8 +616,11 @@ class X2Ros2TeleopController(HardwareTeleopController):
         self.enable_head_state_feedback = bool(enable_head_state_feedback)
         self.camera_color_topics = camera_color_topics
         self.camera_depth_topics = camera_depth_topics
+        self.camera_video_streams = camera_video_streams
         self.camera_width = int(camera_width)
         self.camera_height = int(camera_height)
+        self.camera_video_width = int(camera_video_width)
+        self.camera_video_height = int(camera_video_height)
         self.camera_enable_depth = bool(camera_enable_depth)
         self.camera_enable_compression = bool(camera_enable_compression)
         self.camera_jpg_quality = int(camera_jpg_quality)
@@ -775,9 +833,9 @@ class X2Ros2TeleopController(HardwareTeleopController):
         if not self.enable_camera:
             return
 
-        if Ros2CameraInterface is None:
+        if Ros2CameraInterface is None and VideoStreamCameraInterface is None:
             print(
-                "Camera display is enabled, but Ros2CameraInterface is unavailable. "
+                "Camera display is enabled, but camera interfaces are unavailable. "
                 "Skipping camera initialization."
             )
             self.enable_camera = False
@@ -787,26 +845,53 @@ class X2Ros2TeleopController(HardwareTeleopController):
             color_topics_spec=self.camera_color_topics,
             depth_topics_spec=self.camera_depth_topics,
         )
-        if not camera_topics:
-            print("Camera display is enabled, but no valid camera topics were configured.")
+        camera_streams = self._parse_camera_topic_spec(self.camera_video_streams)
+        if not camera_topics and not camera_streams:
+            print("Camera display is enabled, but no valid camera inputs were configured.")
             self.enable_camera = False
             return
 
         try:
-            self.camera_interface = Ros2CameraInterface(
-                node_name="x2_ros2_camera_interface",
-                camera_topics=camera_topics,
-                enable_depth=self.camera_enable_depth,
-                width=self.camera_width,
-                height=self.camera_height,
-                enable_compression=self.camera_enable_compression,
-                jpg_quality=self.camera_jpg_quality,
-                raw_passthrough_for_logging=self.camera_raw_passthrough_for_logging,
+            camera_interfaces = []
+            if camera_topics:
+                if Ros2CameraInterface is None:
+                    raise RuntimeError("Ros2CameraInterface is unavailable for configured ROS2 camera topics.")
+                camera_interfaces.append(
+                    Ros2CameraInterface(
+                        node_name="x2_ros2_camera_interface",
+                        camera_topics=camera_topics,
+                        enable_depth=self.camera_enable_depth,
+                        width=self.camera_width,
+                        height=self.camera_height,
+                        enable_compression=self.camera_enable_compression,
+                        jpg_quality=self.camera_jpg_quality,
+                        raw_passthrough_for_logging=self.camera_raw_passthrough_for_logging,
+                    )
+                )
+            if camera_streams:
+                if VideoStreamCameraInterface is None:
+                    raise RuntimeError("VideoStreamCameraInterface is unavailable for configured camera streams.")
+                camera_interfaces.append(
+                    VideoStreamCameraInterface(
+                        camera_streams=camera_streams,
+                        width=self.camera_video_width,
+                        height=self.camera_video_height,
+                        enable_compression=self.camera_enable_compression,
+                        jpg_quality=self.camera_jpg_quality,
+                    )
+                )
+
+            self.camera_interface = (
+                camera_interfaces[0]
+                if len(camera_interfaces) == 1
+                else CompositeCameraInterface(camera_interfaces)
             )
             self.camera_interface.start()
             if self._executor is not None:
-                self._executor.add_node(self.camera_interface)
-            print(f"Camera initialized successfully with topics: {camera_topics}")
+                for interface in camera_interfaces:
+                    if isinstance(interface, Node):
+                        self._executor.add_node(interface)
+            print(f"Camera initialized successfully with topics={camera_topics}, streams={camera_streams}")
         except Exception as exc:
             print(f"Error initializing camera interface: {exc}")
             if self.camera_interface is not None:
@@ -814,10 +899,12 @@ class X2Ros2TeleopController(HardwareTeleopController):
                     self.camera_interface.stop()
                 except Exception:
                     pass
-                try:
-                    self.camera_interface.destroy_node()
-                except Exception:
-                    pass
+                for interface in getattr(self.camera_interface, "interfaces", [self.camera_interface]):
+                    if isinstance(interface, Node):
+                        try:
+                            interface.destroy_node()
+                        except Exception:
+                            pass
             self.camera_interface = None
             self.enable_camera = False
 
@@ -1356,7 +1443,8 @@ class X2Ros2TeleopController(HardwareTeleopController):
                 pass
 
         if self._executor is not None:
-            for interface in (self.camera_interface, self.arm_interface, self.head_interface, self.hand_interface):
+            camera_interfaces = getattr(self.camera_interface, "interfaces", [self.camera_interface])
+            for interface in (*camera_interfaces, self.arm_interface, self.head_interface, self.hand_interface):
                 if interface is not None:
                     try:
                         self._executor.remove_node(interface)

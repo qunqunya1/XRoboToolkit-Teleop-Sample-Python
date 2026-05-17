@@ -63,6 +63,7 @@ class Ros2CameraInterface(Node, BaseCameraInterface):
             jpg_quality=jpg_quality,
         )
         self.camera_topics = camera_topics
+        self.expected_camera_names = set(camera_topics.keys())
         self.enable_depth = enable_depth
         self.width = int(width) if width and int(width) > 0 else None
         self.height = int(height) if height and int(height) > 0 else None

@@ -557,6 +557,7 @@ def convert(
     include_head: bool,
     include_hands: bool,
     repo_id: str | None,
+    use_lerobot_sdk: bool,
 ) -> None:
     if pa is None or pq is None:
         raise SystemExit(
@@ -599,7 +600,7 @@ def convert(
 
     resolved_repo_id = repo_id or output_dir.name
     sdk_error = None
-    if _LeRobotDataset is not None:
+    if use_lerobot_sdk and _LeRobotDataset is not None:
         try:
             if output_dir.exists():
                 for required_path in ("data", "meta", "videos"):
@@ -627,6 +628,8 @@ def convert(
         except Exception as exc:
             sdk_error = exc
             print(f"Warning: official lerobot SDK export failed, falling back to manual export: {exc}")
+    elif use_lerobot_sdk and _LeRobotDataset is None:
+        print("Warning: official lerobot SDK export requested but lerobot is not installed; using manual export.")
 
     output_dir.mkdir(parents=True, exist_ok=True)
     data_dir = output_dir / "data" / "chunk-000"
@@ -943,6 +946,14 @@ def main():
         default=None,
         help="Preferred repo_id when official lerobot SDK export is available. Defaults to output dir name.",
     )
+    parser.add_argument(
+        "--use-lerobot-sdk",
+        action="store_true",
+        help=(
+            "Use the official LeRobotDataset writer when installed. Disabled by default "
+            "because some SDK versions resize videos during encoding."
+        ),
+    )
     args = parser.parse_args()
 
     paths = [Path(p) for p in args.log_paths]
@@ -971,6 +982,7 @@ def main():
         include_head=args.include_head,
         include_hands=include_hands,
         repo_id=args.repo_id,
+        use_lerobot_sdk=args.use_lerobot_sdk,
     )
 
 
