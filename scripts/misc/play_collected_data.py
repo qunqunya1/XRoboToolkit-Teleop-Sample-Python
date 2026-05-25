@@ -67,6 +67,14 @@ ACTION_KEYS = ("action", "arm_command")
 
 
 @dataclass
+class VideoInfo:
+    width: int = 0
+    height: int = 0
+    fps: float = 0.0
+    frame_count: int = 0
+
+
+@dataclass
 class PlaybackData:
     source: Path
     mode: str
@@ -78,6 +86,7 @@ class PlaybackData:
     action_names: list[str]
     frames: list[dict[str, np.ndarray]] | None = None
     video_paths: dict[str, Path] | None = None
+    video_info: dict[str, VideoInfo] | None = None
 
     @property
     def length(self) -> int:
@@ -98,8 +107,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--camera-names", default=None, help="Comma-separated camera names to show. Defaults to all cameras found.")
     parser.add_argument("--fps", type=float, default=None, help="Override playback FPS. Defaults to timestamps or dataset metadata.")
     parser.add_argument("--speed", type=float, default=1.0, help="Playback speed multiplier.")
-    parser.add_argument("--max-width", type=int, default=1280, help="Maximum mosaic width.")
-    parser.add_argument("--max-height", type=int, default=900, help="Maximum mosaic height.")
+    parser.add_argument("--fit-window", action="store_true", help="Scale camera images to fit --max-width/--max-height. Default keeps original video pixels.")
+    parser.add_argument("--max-width", type=int, default=1280, help="Maximum mosaic width when --fit-window is used.")
+    parser.add_argument("--max-height", type=int, default=900, help="Maximum mosaic height when --fit-window is used.")
     parser.add_argument("--trail", type=int, default=180, help="Number of recent samples shown in curves.")
     parser.add_argument("--no-display", action="store_true", help="Print quality summary and validate readable frames without opening a window.")
     parser.add_argument("--decode-images", action="store_true", help="Decode every raw log image during health check.")
@@ -292,6 +302,7 @@ def load_raw_logs(paths: list[Path], args: argparse.Namespace) -> PlaybackData:
         state_names=state_names,
         action_names=action_names,
         frames=frames,
+        video_info=infer_frame_video_info(frames, args.fps or derive_fps(timestamps)),
     )
 
 
@@ -330,10 +341,12 @@ def load_lerobot_dataset(path: Path, args: argparse.Namespace) -> PlaybackData:
     states = column_to_matrix(columns.get("observation.state"))
     actions = column_to_matrix(columns.get("action"))
     video_paths = {}
+    video_info = {}
     for camera_name in camera_names:
         matches = sorted((path / "videos" / camera_name).glob("chunk-*/file-*.mp4"))
         if matches:
             video_paths[camera_name] = matches[0]
+            video_info[camera_name] = read_video_info(matches[0])
 
     print_lerobot_summary(path, info, table.num_rows, video_paths)
     return PlaybackData(
@@ -346,7 +359,35 @@ def load_lerobot_dataset(path: Path, args: argparse.Namespace) -> PlaybackData:
         state_names=feature_names(features, "observation.state"),
         action_names=feature_names(features, "action"),
         video_paths=video_paths,
+        video_info=video_info,
     )
+
+
+def read_video_info(path: Path) -> VideoInfo:
+    cap = cv2.VideoCapture(str(path))
+    try:
+        return VideoInfo(
+            width=int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+            height=int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+            fps=float(cap.get(cv2.CAP_PROP_FPS) or 0.0),
+            frame_count=int(cap.get(cv2.CAP_PROP_FRAME_COUNT)),
+        )
+    finally:
+        cap.release()
+
+
+def infer_frame_video_info(frames: list[dict[str, np.ndarray]], fps: float) -> dict[str, VideoInfo]:
+    info: dict[str, VideoInfo] = {}
+    counts: dict[str, int] = {}
+    for frame_set in frames:
+        for camera_name, frame in frame_set.items():
+            counts[camera_name] = counts.get(camera_name, 0) + 1
+            if camera_name not in info:
+                height, width = frame.shape[:2]
+                info[camera_name] = VideoInfo(width=width, height=height, fps=fps, frame_count=0)
+    for camera_name, count in counts.items():
+        info[camera_name].frame_count = count
+    return info
 
 
 def resolve_lerobot_camera_names(features: dict, camera_names_arg: str | None) -> list[str]:
@@ -404,8 +445,20 @@ def print_quality_summary(data: PlaybackData) -> None:
     print(f"  mode: {data.mode}")
     print(f"  frames: {data.length}")
     print(f"  fps: {data.fps:.3f}")
+    print_video_info(data.video_info)
     print_numeric_quality("state", data.states, data.state_names)
     print_numeric_quality("action", data.actions, data.action_names)
+
+
+def print_video_info(video_info: dict[str, VideoInfo] | None) -> None:
+    if not video_info:
+        print("  video info: none")
+        return
+    print("  video info:")
+    for camera_name, info in sorted(video_info.items()):
+        resolution = f"{info.width}x{info.height}" if info.width and info.height else "unknown"
+        fps = f"{info.fps:.3f}" if info.fps > 0 else "unknown"
+        print(f"    {camera_name}: {resolution}, fps={fps}, frames={info.frame_count}")
 
 
 def print_numeric_quality(label: str, matrix: np.ndarray | None, names: list[str]) -> None:
@@ -441,35 +494,62 @@ def validate_readable_frames(data: PlaybackData) -> None:
         cap = cv2.VideoCapture(str(video_path))
         ok, frame = cap.read()
         total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
         cap.release()
         shape = "unknown" if frame is None else f"{frame.shape[1]}x{frame.shape[0]}"
         status = "OK" if ok else "FAIL"
-        print(f"  video {camera_name}: {status}, frames={total}, shape={shape}, path={video_path}")
+        print(f"  video {camera_name}: {status}, frames={total}, shape={shape}, fps={fps:.3f}, path={video_path}")
 
 
-def make_mosaic(frames: dict[str, np.ndarray], max_width: int, max_height: int) -> np.ndarray:
+def make_mosaic(
+    frames: dict[str, np.ndarray],
+    max_width: int,
+    max_height: int,
+    fit_window: bool,
+) -> np.ndarray:
     if not frames:
         return np.zeros((240, 426, 3), dtype=np.uint8)
-    tiles = []
-    for name, frame in sorted(frames.items()):
-        tile = frame.copy()
-        cv2.putText(tile, name, (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2, cv2.LINE_AA)
-        tiles.append(tile)
+    tiles = [ensure_bgr_uint8(frame) for _, frame in sorted(frames.items())]
     cols = min(2, len(tiles))
     rows = int(math.ceil(len(tiles) / cols))
-    tile_w = max(1, max_width // cols)
-    tile_h = max(1, max_height // (rows + 1))
-    resized = [resize_to_box(tile, tile_w, tile_h) for tile in tiles]
-    blank = np.zeros_like(resized[0])
-    while len(resized) < rows * cols:
-        resized.append(blank.copy())
-    row_images = [np.hstack(resized[row * cols : (row + 1) * cols]) for row in range(rows)]
+
+    if fit_window:
+        tile_w = max(1, max_width // cols)
+        tile_h = max(1, max_height // (rows + 1))
+        tiles = [resize_to_box(tile, tile_w, tile_h) for tile in tiles]
+
+    cell_w = max(tile.shape[1] for tile in tiles)
+    cell_h = max(tile.shape[0] for tile in tiles)
+    padded = [pad_to_box(tile, cell_w, cell_h) for tile in tiles]
+    blank = np.zeros((cell_h, cell_w, 3), dtype=np.uint8)
+    while len(padded) < rows * cols:
+        padded.append(blank.copy())
+    row_images = [np.hstack(padded[row * cols : (row + 1) * cols]) for row in range(rows)]
     return np.vstack(row_images)
+
+
+def ensure_bgr_uint8(image: np.ndarray) -> np.ndarray:
+    frame = image
+    if frame.ndim == 2:
+        frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+    if frame.ndim == 3 and frame.shape[2] == 4:
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+    if frame.dtype != np.uint8:
+        frame = np.clip(frame, 0, 255).astype(np.uint8)
+    return frame
+
+
+def pad_to_box(image: np.ndarray, width: int, height: int) -> np.ndarray:
+    canvas = np.zeros((height, width, 3), dtype=np.uint8)
+    y = (height - image.shape[0]) // 2
+    x = (width - image.shape[1]) // 2
+    canvas[y : y + image.shape[0], x : x + image.shape[1]] = image
+    return canvas
 
 
 def resize_to_box(image: np.ndarray, max_width: int, max_height: int) -> np.ndarray:
     height, width = image.shape[:2]
-    scale = min(max_width / width, max_height / height)
+    scale = min(max_width / width, max_height / height, 1.0)
     new_size = (max(1, int(width * scale)), max(1, int(height * scale)))
     resized = cv2.resize(image, new_size)
     canvas = np.zeros((max_height, max_width, 3), dtype=np.uint8)
@@ -514,6 +594,39 @@ def draw_matrix_curve(canvas: np.ndarray, matrix: np.ndarray | None, index: int,
     cv2.putText(canvas, f"range [{ymin:.2f}, {ymax:.2f}]", (110, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (190, 190, 190), 1, cv2.LINE_AA)
 
 
+def make_status_bar(data: PlaybackData, frames: dict[str, np.ndarray], index: int, width: int, speed: float) -> np.ndarray:
+    lines = [
+        f"{index + 1}/{data.length}  t={data.timestamps[index]:.3f}s  playback={data.fps:.2f}fps  speed={speed:.2f}x"
+    ]
+    camera_parts = []
+    for camera_name in sorted(frames):
+        info = (data.video_info or {}).get(camera_name)
+        if info is None:
+            height, frame_width = frames[camera_name].shape[:2]
+            camera_parts.append(f"{camera_name}: {frame_width}x{height}")
+            continue
+        resolution = f"{info.width}x{info.height}" if info.width and info.height else "unknown"
+        fps = f"{info.fps:.2f}fps" if info.fps > 0 else "fps unknown"
+        camera_parts.append(f"{camera_name}: {resolution} @ {fps}")
+    if camera_parts:
+        lines.append("  |  ".join(camera_parts))
+
+    bar_height = 28 * len(lines) + 12
+    bar = np.full((bar_height, width, 3), 18, dtype=np.uint8)
+    for line_idx, line in enumerate(lines):
+        cv2.putText(
+            bar,
+            line,
+            (12, 24 + line_idx * 28),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.62,
+            (235, 235, 235),
+            1,
+            cv2.LINE_AA,
+        )
+    return bar
+
+
 def frame_source(data: PlaybackData):
     if data.frames is not None:
         for frames in data.frames:
@@ -545,11 +658,10 @@ def play(data: PlaybackData, args: argparse.Namespace) -> None:
     while index < data.length:
         frames = cached_frames[index] if index < len(cached_frames) else {}
         mosaic_height = max(240, args.max_height - 220)
-        mosaic = make_mosaic(frames, args.max_width, mosaic_height)
+        mosaic = make_mosaic(frames, args.max_width, mosaic_height, args.fit_window)
+        status = make_status_bar(data, frames, index, mosaic.shape[1], args.speed)
         curves = plot_curves(data, index, mosaic.shape[1], 220, args.trail)
-        composed = np.vstack([mosaic, curves])
-        text = f"{index + 1}/{data.length}  t={data.timestamps[index]:.3f}s  fps={data.fps:.2f}  speed={args.speed:.2f}x"
-        cv2.putText(composed, text, (12, composed.shape[0] - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (240, 240, 240), 1, cv2.LINE_AA)
+        composed = np.vstack([mosaic, status, curves])
         cv2.imshow(window_name, composed)
 
         start = time.time()

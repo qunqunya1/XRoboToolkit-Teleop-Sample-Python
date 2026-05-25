@@ -54,7 +54,8 @@ if str(_REPO_ROOT) not in sys.path:
 
 
 DEFAULT_ARM_STATE_TOPIC = "/aima/hal/joint/arm/state"
-DEFAULT_ARM_COMMAND_TOPIC = "/aima/hal/joint/arm/command"
+DEFAULT_UPPER_BODY_COMMAND_TOPIC = "/upper_body/teleop_joint_states"
+DEFAULT_ARM_COMMAND_TOPIC = DEFAULT_UPPER_BODY_COMMAND_TOPIC
 DEFAULT_HEAD_STATE_TOPIC = "/aima/hal/joint/head/state"
 DEFAULT_HEAD_COMMAND_TOPIC = "/aima/hal/joint/head/command"
 DEFAULT_HAND_COMMAND_TOPIC = "/aima/hal/joint/hand/command"

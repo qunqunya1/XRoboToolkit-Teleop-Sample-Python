@@ -29,6 +29,8 @@ from __future__ import annotations
 import argparse
 import json
 import pickle
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, Sequence
@@ -54,6 +56,21 @@ except ImportError:
 
 DEFAULT_HAND_COMMAND_NAMES = ["left_hand", "right_hand"]
 DEFAULT_HAND_COMMAND_VALUE = 1.0
+VIDEO_CODEC_NAME = "h265"
+H265_CRF = 23
+H265_PRESET = "medium"
+
+
+def _find_ffmpeg_executable() -> str | None:
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg:
+        return ffmpeg
+    try:
+        import imageio_ffmpeg
+
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return None
 
 
 def _load_log(path: Path) -> list[dict]:
@@ -384,19 +401,93 @@ def _try_convert_with_lerobot_sdk(
     return True
 
 
+class FfmpegH265VideoWriter:
+    def __init__(self, video_path: Path, fps: float, size: tuple[int, int]):
+        ffmpeg = _find_ffmpeg_executable()
+        if ffmpeg is None:
+            raise RuntimeError(
+                "ffmpeg executable was not found. Install ffmpeg with libx265 support before converting H.265 videos. "
+                "Options: sudo apt install ffmpeg, or python3 -m pip install imageio-ffmpeg."
+            )
+
+        width, height = size
+        self.video_path = video_path
+        self.size = size
+        self.process = subprocess.Popen(
+            [
+                ffmpeg,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "bgr24",
+                "-s:v",
+                f"{width}x{height}",
+                "-r",
+                f"{float(fps):.6f}",
+                "-i",
+                "-",
+                "-an",
+                "-c:v",
+                "libx265",
+                "-preset",
+                H265_PRESET,
+                "-crf",
+                str(H265_CRF),
+                "-tag:v",
+                "hvc1",
+                "-pix_fmt",
+                "yuv420p",
+                str(video_path),
+            ],
+            stdin=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        if self.process.stdin is None:
+            raise RuntimeError(f"Failed to open ffmpeg stdin for {video_path}")
+
+    def write(self, frame: np.ndarray) -> None:
+        width, height = self.size
+        if frame.shape[:2] != (height, width):
+            raise ValueError(
+                f"Frame shape {frame.shape[:2]} does not match video size {(height, width)} for {self.video_path}"
+            )
+        if frame.dtype != np.uint8:
+            frame = np.clip(frame, 0, 255).astype(np.uint8)
+        if not frame.flags.c_contiguous:
+            frame = np.ascontiguousarray(frame)
+        try:
+            self.process.stdin.write(frame.tobytes())
+        except BrokenPipeError as exc:
+            stderr = self._read_stderr()
+            raise RuntimeError(f"ffmpeg stopped while writing {self.video_path}: {stderr}") from exc
+
+    def release(self) -> None:
+        if self.process.stdin is not None and not self.process.stdin.closed:
+            self.process.stdin.close()
+        return_code = self.process.wait()
+        stderr = self._read_stderr()
+        if return_code != 0:
+            raise RuntimeError(f"ffmpeg failed for {self.video_path} with code {return_code}: {stderr}")
+
+    def _read_stderr(self) -> str:
+        if self.process.stderr is None:
+            return ""
+        try:
+            return self.process.stderr.read().decode("utf-8", errors="replace").strip()
+        except Exception:
+            return ""
+
+
 def _write_mp4(video_path: Path, frames: Sequence[np.ndarray], fps: float) -> tuple[int, int]:
     if not frames:
         raise ValueError(f"No frames to write for {video_path}")
     height, width = frames[0].shape[:2]
     video_path.parent.mkdir(parents=True, exist_ok=True)
-    writer = cv2.VideoWriter(
-        str(video_path),
-        cv2.VideoWriter_fourcc(*"mp4v"),
-        float(fps),
-        (width, height),
-    )
-    if not writer.isOpened():
-        raise RuntimeError(f"Failed to open video writer for {video_path}")
+    writer = _open_ffmpeg_h265_writer(video_path, float(fps), (width, height))
     try:
         for frame in frames:
             if frame.shape[:2] != (height, width):
@@ -407,17 +498,18 @@ def _write_mp4(video_path: Path, frames: Sequence[np.ndarray], fps: float) -> tu
     return height, width
 
 
-def _open_video_writer(video_path: Path, frame: np.ndarray, fps: float) -> cv2.VideoWriter:
+def _open_video_writer(video_path: Path, frame: np.ndarray, fps: float) -> FfmpegH265VideoWriter:
     height, width = frame.shape[:2]
     video_path.parent.mkdir(parents=True, exist_ok=True)
-    writer = cv2.VideoWriter(
-        str(video_path),
-        cv2.VideoWriter_fourcc(*"mp4v"),
-        float(fps),
-        (width, height),
+    return _open_ffmpeg_h265_writer(video_path, float(fps), (width, height))
+
+
+def _open_ffmpeg_h265_writer(video_path: Path, fps: float, size: tuple[int, int]) -> FfmpegH265VideoWriter:
+    writer = FfmpegH265VideoWriter(video_path, fps, size)
+    print(
+        f"Opened ffmpeg/libx265 video writer for {video_path} "
+        f"(size={size[0]}x{size[1]}, fps={fps:.3f}, crf={H265_CRF}, preset={H265_PRESET})"
     )
-    if not writer.isOpened():
-        raise RuntimeError(f"Failed to open video writer for {video_path}")
     return writer
 
 
@@ -637,7 +729,7 @@ def convert(
     episodes_dir.mkdir(parents=True, exist_ok=True)
     parquet_path = data_dir / "file-000.parquet"
     parquet_writer = None
-    video_writers: dict[str, cv2.VideoWriter] = {}
+    video_writers: dict[str, FfmpegH265VideoWriter] = {}
     video_sizes: dict[str, tuple[int, int]] = {}
     row_group_size = 2048
     row_buffer = {
@@ -841,7 +933,7 @@ def convert(
             "names": ["height", "width", "channel"],
             "info": {
                 "video.fps": float(resolved_fps),
-                "video.codec": "mp4v",
+                "video.codec": VIDEO_CODEC_NAME,
             },
         }
     (meta_dir / "info.json").write_text(json.dumps(info, indent=2), encoding="utf-8")

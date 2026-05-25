@@ -39,6 +39,10 @@ def _encoding_to_dtype_and_channels(encoding: str):
     return None, None
 
 
+def _is_compressed_topic(topic: str) -> bool:
+    return topic.endswith("/compressed") or topic.endswith("_compressed")
+
+
 class Ros2CameraInterface(Node, BaseCameraInterface):
     """
     ROS2 camera interface for one or more image topics.
@@ -79,7 +83,7 @@ class Ros2CameraInterface(Node, BaseCameraInterface):
         for name, topics in self.camera_topics.items():
             if "color" in topics:
                 color_topic = topics["color"]
-                msg_type = CompressedImage if color_topic.endswith("/compressed") else Image
+                msg_type = CompressedImage if _is_compressed_topic(color_topic) else Image
                 callback = self._color_compressed_callback if msg_type is CompressedImage else self._color_raw_callback
                 self.subscribers.append(
                     self.create_subscription(
@@ -91,7 +95,7 @@ class Ros2CameraInterface(Node, BaseCameraInterface):
                 )
             if self.enable_depth and "depth" in topics:
                 depth_topic = topics["depth"]
-                depth_type = CompressedImage if depth_topic.endswith("/compressed") else Image
+                depth_type = CompressedImage if _is_compressed_topic(depth_topic) else Image
                 depth_cb = self._depth_compressed_callback if depth_type is CompressedImage else self._depth_raw_callback
                 self.subscribers.append(
                     self.create_subscription(

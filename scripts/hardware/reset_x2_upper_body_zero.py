@@ -16,12 +16,12 @@ if str(_REPO_ROOT) not in sys.path:
 
 
 from xrobotoolkit_teleop.hardware.x2_ros2_teleop_controller import (
-    DEFAULT_ARM_COMMAND_TOPIC,
     DEFAULT_ARM_STATE_TOPIC,
     DEFAULT_HEAD_COMMAND_TOPIC,
     DEFAULT_HEAD_STATE_TOPIC,
     DEFAULT_HARDWARE_COMMAND_SPECS,
     DEFAULT_MODEL_TO_HARDWARE_JOINT_MAP,
+    DEFAULT_UPPER_BODY_COMMAND_TOPIC,
     ARM_MODEL_JOINT_NAMES,
     HEAD_MODEL_JOINT_NAMES,
     JointCommandSpec,
@@ -137,7 +137,7 @@ def _build_zero_targets(
 
 def main(
     arm_state_topic: str = DEFAULT_ARM_STATE_TOPIC,
-    arm_command_topic: str = DEFAULT_ARM_COMMAND_TOPIC,
+    arm_command_topic: str = DEFAULT_UPPER_BODY_COMMAND_TOPIC,
     head_state_topic: str = DEFAULT_HEAD_STATE_TOPIC,
     head_command_topic: str = DEFAULT_HEAD_COMMAND_TOPIC,
     leg_state_topic: str = DEFAULT_LEG_STATE_TOPIC,

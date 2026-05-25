@@ -85,7 +85,7 @@ DEFAULT_X2_MANIPULATOR_CONFIG = {
         "input_rotation_alpha": 0.25,
         "max_target_linear_step_m": 0.03,
         "max_target_angular_step_rad": 0.35,
-        "workspace_min_z": 0.0,
+        "workspace_min_z": -0.2,
     },
     "right_arm": {
         "link_name": "right_wrist_roll_link",
@@ -112,16 +112,20 @@ DEFAULT_X2_MANIPULATOR_CONFIG = {
 }
 
 DEFAULT_ARM_STATE_TOPIC = "/aima/hal/joint/arm/state"
-DEFAULT_ARM_COMMAND_TOPIC = "/aima/hal/joint/arm/command"
+DEFAULT_UPPER_BODY_COMMAND_TOPIC = "/upper_body/teleop_joint_states"
+DEFAULT_ARM_COMMAND_TOPIC = DEFAULT_UPPER_BODY_COMMAND_TOPIC
 DEFAULT_HEAD_STATE_TOPIC = "/aima/hal/joint/head/state"
 DEFAULT_HEAD_COMMAND_TOPIC = "/aima/hal/joint/head/command"
 DEFAULT_HAND_COMMAND_TOPIC = "/aima/hal/joint/hand/command"
 DEFAULT_X2_CAMERA_COLOR_TOPICS = (
-    "head_front=/aima/hal/sensor/rgbd_head_front/rgb_image,"
-    "right_wrist=/right/rgb/image_raw,"
-    "left_wrist=/left/rgb/image_raw"
+    "head_front=/aima/hal/sensor/rgbd_head_front/rgb_image/compressed,"
+    "right_wrist=/right/rgb/image_compressed,"
+    "left_wrist=/left/rgb/image_compressed"
 )
 DEFAULT_X2_CAMERA_DEPTH_TOPICS = ""
+
+EXPECTED_X2_CAMERA_NAMES = ("head_front", "right_wrist", "left_wrist")
+DEFAULT_CAMERA_COMPLETENESS_WAIT_S = 2.0
 
 if QoSProfile is not None:
     SUBSCRIBER_QOS = QoSProfile(
@@ -507,8 +511,8 @@ class X2Ros2TeleopController(HardwareTeleopController):
         visualize_placo: bool = False,
         control_rate_hz: int = 100,
         enable_log_data: bool = True,
-        log_dir: str = "/media/xlq/ESD-USB",
-        log_freq: float = 15.0,
+        log_dir: str = "/logs/x2_hardware_logs",
+        log_freq: float = 30,
         validate_log_before_save: bool = True,
         decode_images_on_log_validate: bool = True,
         enable_camera: bool = False,
@@ -613,10 +617,21 @@ class X2Ros2TeleopController(HardwareTeleopController):
         }
         self.arm_return_zero_targets.update(
             {
-                "left_shoulder_yaw_joint": self._clip_target("left_shoulder_yaw_joint", 0.1),
-                "left_elbow_joint": self._clip_target("left_elbow_joint", -1.8),
-                "right_shoulder_yaw_joint": self._clip_target("right_shoulder_yaw_joint", -0.1),
-                "right_elbow_joint": self._clip_target("right_elbow_joint", -1.8),
+                "left_shoulder_pitch_joint": 0.04,
+                "left_shoulder_roll_joint": 0.5,
+                "left_shoulder_yaw_joint": 0.08,
+                "left_elbow_joint": -1.5,
+                "left_wrist_yaw_joint": 0.75,
+                "left_wrist_pitch_joint": -0.29,
+                "left_wrist_roll_joint": -1.15,
+
+                "right_shoulder_pitch_joint": 0.04,
+                "right_shoulder_roll_joint": -0.5,
+                "right_shoulder_yaw_joint": -0.08,
+                "right_elbow_joint": -1.5,
+                "right_wrist_yaw_joint": -0.75,
+                "right_wrist_pitch_joint": -0.29,
+                "right_wrist_roll_joint": 1.15,
             }
         )
         self._validate_configuration()
@@ -1184,16 +1199,10 @@ class X2Ros2TeleopController(HardwareTeleopController):
         else:
             head_hold_targets = dict(self.head_target_positions)
         zero_arm_velocities = {joint_name: 0.0 for joint_name in arm_hold_targets}
-        zero_head_velocities = {joint_name: 0.0 for joint_name in head_hold_targets}
 
         self.arm_interface.publish_command(
             joint_targets=arm_hold_targets,
             joint_velocities=zero_arm_velocities,
-            command_specs=self.command_specs,
-        )
-        self.head_interface.publish_command(
-            joint_targets=head_hold_targets,
-            joint_velocities=zero_head_velocities,
             command_specs=self.command_specs,
         )
 
@@ -1239,11 +1248,6 @@ class X2Ros2TeleopController(HardwareTeleopController):
                 for joint_name in arm_targets
             ):
                 arm_velocities = self._compute_joint_velocities(arm_targets, self._prev_arm_targets)
-            self.arm_interface.publish_command(
-                joint_targets=arm_targets,
-                joint_velocities=arm_velocities,
-                command_specs=self.command_specs,
-            )
             self._prev_arm_targets = arm_targets
 
             if self.enable_head_state_feedback:
@@ -1277,9 +1281,9 @@ class X2Ros2TeleopController(HardwareTeleopController):
                 for joint_name in self.head_target_positions
             ):
                 head_velocities = self._compute_joint_velocities(self.head_target_positions, self._prev_head_targets)
-            self.head_interface.publish_command(
-                joint_targets=self.head_target_positions,
-                joint_velocities=head_velocities,
+            self.arm_interface.publish_command(
+                joint_targets=arm_targets,
+                joint_velocities=arm_velocities,
                 command_specs=self.command_specs,
             )
             hand_targets = self._build_hand_targets()
@@ -1356,7 +1360,12 @@ class X2Ros2TeleopController(HardwareTeleopController):
                 pass
 
         if self._executor is not None:
-            for interface in (self.camera_interface, self.arm_interface, self.head_interface, self.hand_interface):
+            for interface in (
+                self.camera_interface,
+                self.arm_interface,
+                self.head_interface,
+                self.hand_interface,
+            ):
                 if interface is not None:
                     try:
                         self._executor.remove_node(interface)
@@ -1365,7 +1374,12 @@ class X2Ros2TeleopController(HardwareTeleopController):
             self._executor.shutdown()
             self._executor = None
 
-        for interface in (self.camera_interface, self.arm_interface, self.head_interface, self.hand_interface):
+        for interface in (
+            self.camera_interface,
+            self.arm_interface,
+            self.head_interface,
+            self.hand_interface,
+        ):
             if interface is not None:
                 interface.destroy_node()
         self.camera_interface = None

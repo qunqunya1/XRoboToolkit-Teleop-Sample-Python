@@ -1,0 +1,22 @@
+name: x2-hardware
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - ffmpeg=7.1.1
+  - libstdcxx-ng
+  - pip:
+      - numpy>=1.26,<2.3
+      - opencv-python==4.10.0.84
+      - ipython
+      - typing_extensions
+      - meshcat
+      - placo==0.9.20
+      - tyro
+      - docstring-parser
+      - typeguard
+      - pyarrow
+      - imageio-ffmpeg
+      - -e ..

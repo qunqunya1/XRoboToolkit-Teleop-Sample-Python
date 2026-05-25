@@ -71,19 +71,19 @@ python3 scripts/misc/convert_sim_log_to_tabletop_hdf5.py \
 
 ```bash
 python3 scripts/misc/convert_x2_sim_log_to_lerobot.py \
-  logs/x2_upper_body_sim \
+  /media/xlq/8E34-513F/log \
   --output-dir datasets/x2_upper_body_lerobot
 ```
 
 ## 2. X2 上半身实机数据采集
 
 ### 2.1 环境准备
-在仓库根目录执行：
+如果只采集 X2 实机数据，可以使用最小 conda 环境。在仓库根目录执行：
 
 ```bash
-conda activate xr_tabletop
+conda env create -f envs/environment.x2_hardware.yml
+conda activate x2-hardware
 source /opt/ros/humble/setup.bash
-PYTHONNOUSERSITE=1 python3 -m pip install -e .
 ```
 
 如果你的机器人驱动消息定义在工作区里，还需要额外 `source` 对应工作区，例如：
@@ -93,6 +93,7 @@ source ros2_ws/install/setup.bash
 ```
 
 说明：
+- `envs/environment.x2_hardware.yml` 只包含实机采集和日志转换需要的最小 Python 依赖，不包含 MuJoCo、Tabletop-Sim、RealSense SDK、UR、Dynamixel、dex_retargeting 等仿真或其他机器人依赖。
 - 实机脚本依赖 `rclpy` 和 `aimdk_msgs`，没有 `source` ROS2 环境会直接启动失败。
 - 若开启 Ruckig 平滑，还需要确保 `source ros2_ws/install/setup.bash` 后可以导入 `ruckig`。
 - 当前脚本默认 `enable_log_data=True`，也就是启动后按 `B` 就会开始真正写日志。
@@ -114,18 +115,18 @@ PYTHONNOUSERSITE=1 python3 scripts/hardware/reset_x2_upper_body_zero.py \
 
 ```bash
 PYTHONNOUSERSITE=1 python3 scripts/hardware/teleop_x2_upper_body_hardware.py \
-  --log-dir /media/xlq/ESD-USB \
-  --control-rate-hz 30
+  --log-dir /media/xlq/8E34-513F/log2\
+  --control-rate-hz 50
 ```
 
 默认关闭头部跟随，头部 yaw/pitch 会持续下发 `0` 位保持。
 
 默认会采集三路相机：
 - `head_front`：`/aima/hal/sensor/rgbd_head_front/rgb_image`
-- `right_wrist`：`/right/rgb/image_raw`
-- `left_wrist`：`/left/rgb/image_raw`
+- `right_wrist`：`/right/rgb/compressed`
+- `left_wrist`：`/left/rgb/compressed`
 
-腕部相机当前按 `15Hz` 发布，脚本的 `camera_fps` 默认也设为 `15`，采集时不需要为了记录本身提高发布频率。只有当策略训练或操作任务确实需要更低视觉延迟、更密集视频帧时，再考虑把腕部相机提升到 `30Hz`；否则三路相机同时记录会明显增加带宽、CPU 解码和磁盘压力。
+腕部相机当前按 `30Hz` 发布
 
 如果需要显示相机图像，可以传入 `--show-camera-window True`（开启相机显示可能会导致关节控制卡顿，因此默认为 `False`）。
 
@@ -301,11 +302,12 @@ python3 scripts/misc/check_teleop_log_health.py logs/x2_upper_body_hardware
 
 ```bash
 python3 scripts/misc/play_collected_data.py \
-  logs/x2_upper_body_hardware/teleop_log_20260430_204213_67.pkl
+  /media/xlq/8E34-513F/log/teleop_log_20260521_131406_1.pkl
 ```
 
 回放窗口会显示：
-- 多路相机画面拼接，例如 `head_front`、`right_wrist`、`left_wrist`
+- 多路相机画面拼接，例如 `head_front`、`right_wrist`、`left_wrist`；默认按原始视频像素显示，不缩放、不在图像区域叠字
+- 每路相机的分辨率和视频 FPS
 - `state` 曲线，用来观察机器人回传状态是否连续
 - `action` 曲线，用来观察控制命令是否连续、是否有突跳或长时间不动
 
@@ -318,7 +320,7 @@ python3 scripts/misc/play_collected_data.py \
 
 ```bash
 python3 scripts/misc/play_collected_data.py \
-  logs/x2_upper_body_hardware/teleop_log_YYYYMMDD_HHMMSS_1.pkl \
+  /media/xlq/8E34-513F/log/teleop_log_20260521_131406_1.pkl \
   --camera-names head_front,right_wrist,left_wrist
 ```
 
@@ -342,6 +344,8 @@ python3 scripts/misc/play_collected_data.py datasets/x2_hardware_lerobot_v3 --no
 
 摘要会打印帧数、FPS、state/action 是否全是有限值、各维运动范围，以及视频文件是否能读到首帧。若某条数据 `moving dims` 很少、`max_range` 很小，通常说明该条数据运动量不足，不适合作为有效训练样本。
 
+如果屏幕放不下原始分辨率画面，可以额外传 `--fit-window --max-width 1280 --max-height 900` 临时缩放显示。
+
 ### 2.8 让实机按采集数据回放运动
 
 如果需要让实机按照采集到的 `arm_command` 或 LeRobot 数据集中的 `action` 运动，可以使用：
@@ -357,7 +361,7 @@ python3 scripts/hardware/replay_x2_collected_data_on_hardware.py \
 source /opt/ros/humble/setup.bash
 source ros2_ws/install/setup.bash
 PYTHONNOUSERSITE=1 python3 scripts/hardware/replay_x2_collected_data_on_hardware.py \
-  logs/x2_upper_body_hardware/teleop_log_20260430_204213_67.pkl \
+  /media/xlq/8E34-513F/log/teleop_log_20260521_150158_75.pkl\
   --execute-hardware \
   --move-to-start \
   --speed 0.5
@@ -419,11 +423,11 @@ PYTHONNOUSERSITE=1 python3 -m pip install pyarrow
 
 ```bash
 python3 scripts/misc/convert_x2_hardware_log_to_lerobot_v3.py \
-  logs/x2_upper_body_hardware \
+  /media/xlq/8E34-513F/log\
   --output-dir datasets/x2_hardware_lerobot_v3 \
   --camera-names head_front,right_wrist,left_wrist \
   --include-hands \
-  --instruction "Insert the red cylinder into the black holder using the left hand."
+  --instruction "Insert the red cylinder into the black holder ."
 ```
 
 如果只想转换某一条日志，也可以直接传单个 `.pkl` 文件：
